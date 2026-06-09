@@ -1,11 +1,30 @@
 export const MUKAKU_ORIGIN = 'https://web5.mukaku.com';
 export const MUKAKU_SNAPSHOT_MESSAGE = 'BT0_GET_MUKAKU_SNAPSHOT';
+export const MUKAKU_API_BASE = '/prod/api/v1';
+export const MUKAKU_APP_ID = '83768d9ad4';
+export const MUKAKU_IDENTITY = '23734adac0301bccdcb107c4aa21f96c';
 
 export type MukakuRouteKind = 'detail' | 'listing' | 'search' | 'other';
 
 export type MukakuResourceSummary = {
   label: string;
   count: number | null;
+};
+
+/** A single seed/magnet resource item from the API or DOM */
+export type MukakuSeedResource = {
+  /** Display name of the resource */
+  name: string;
+  /** Magnet link URI */
+  magnet: string;
+  /** File size (e.g. "10.9 GB") */
+  size: string;
+  /** Quality definition (e.g. "1080P蓝光", "4K蓝光") */
+  quality: string;
+  /** When the seed was added (ISO date string) */
+  addedAt: string | null;
+  /** Whether this is a "new" item */
+  isNew: boolean;
 };
 
 export type MukakuMediaSnapshot = {
@@ -38,6 +57,10 @@ export type MukakuMediaSnapshot = {
     netdiskTotal: number | null;
     categories: MukakuResourceSummary[];
     visibleItems: number;
+    /** Seeds grouped by quality definition (e.g. "1080P蓝光" → seeds) */
+    seedsByQuality: Record<string, MukakuSeedResource[]>;
+    /** Flat list of all seeds */
+    allSeeds: MukakuSeedResource[];
   };
   pageReady: boolean;
   capturedAt: string;

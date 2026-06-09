@@ -3,9 +3,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import {
   AlertCircle,
   BadgeInfo,
+  Check,
   Clapperboard,
+  Copy,
   ExternalLink,
   Film,
+  Magnet,
   RefreshCw,
   ShieldCheck,
   Tags,
@@ -103,6 +106,53 @@ function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for older browsers
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function CopyButton({ text, label = '复制' }: { text: string; label?: string }) {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = React.useCallback(async () => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [text]);
+
+  return (
+    <Button
+      aria-label={copied ? '已复制' : label}
+      className="h-7 gap-1 text-xs"
+      size="sm"
+      variant={copied ? 'default' : 'outline'}
+      onClick={handleCopy}
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {copied ? '已复制' : label}
+    </Button>
+  );
 }
 
 function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -336,12 +386,6 @@ function DetailView({
 
             <TabsContent value="resources" className="mt-4">
               <div className="flex flex-col gap-4">
-                <Alert>
-                  <ShieldCheck className="h-4 w-4" />
-                  <AlertTitle>仅展示概览</AlertTitle>
-                  <AlertDescription>这里不会读取或展示具体磁力、种子、网盘链接和提取码。</AlertDescription>
-                </Alert>
-
                 <div className="grid grid-cols-3 gap-2">
                   <Card>
                     <CardContent className="p-3 text-center">
@@ -363,24 +407,108 @@ function DetailView({
                   </Card>
                 </div>
 
-                <Card>
-                  <CardHeader className="p-4 pb-3">
-                    <CardTitle className="text-base">分类概览</CardTitle>
-                    <CardDescription>来自当前页面可见资源分类栏。</CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex flex-col gap-2 p-4 pt-0">
-                    {snapshot.resources.categories.length ? (
-                      snapshot.resources.categories.map((category) => (
-                        <div key={`${category.label}-${category.count}`} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
+                {/* Magnet links — grouped by quality */}
+                {snapshot.resources.allSeeds.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2">
+                      <Magnet className="h-4 w-4 text-muted-foreground" />
+                      <h3 className="text-sm font-semibold">磁力链接</h3>
+                      <Badge variant="secondary" className="text-xs">
+                        {snapshot.resources.allSeeds.length}
+                      </Badge>
+                    </div>
+
+                    {Object.entries(snapshot.resources.seedsByQuality).length > 0
+                      ? Object.entries(snapshot.resources.seedsByQuality).map(([quality, seeds]) => (
+                          <Card key={quality}>
+                            <CardHeader className="p-3 pb-2">
+                              <CardTitle className="flex items-center gap-2 text-sm">
+                                <Badge variant="outline">{quality}</Badge>
+                                <span className="text-xs text-muted-foreground">{seeds.length} 个资源</span>
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent className="flex flex-col gap-2 p-3 pt-0">
+                              {seeds.map((seed, idx) => (
+                                <div
+                                  key={`${seed.magnet.slice(-20)}-${idx}`}
+                                  className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
+                                    <CopyButton
+                                      label="复制磁力"
+                                      text={seed.magnet}
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <span>{seed.size}</span>
+                                    {seed.addedAt ? (
+                                      <>
+                                        <span>·</span>
+                                        <span>{seed.addedAt}</span>
+                                      </>
+                                    ) : null}
+                                    {seed.isNew ? (
+                                      <Badge className="h-4 px-1 text-[10px]" variant="default">
+                                        新
+                                      </Badge>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ))}
+                            </CardContent>
+                          </Card>
+                        ))
+                      : /* Flat list when no quality grouping */
+                        snapshot.resources.allSeeds.map((seed, idx) => (
+                          <div
+                            key={`${seed.magnet.slice(-20)}-${idx}`}
+                            className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
+                              <CopyButton label="复制磁力" text={seed.magnet} />
+                            </div>
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span>{seed.size}</span>
+                              {seed.addedAt ? <span>· {seed.addedAt}</span> : null}
+                              {seed.isNew ? (
+                                <Badge className="h-4 px-1 text-[10px]" variant="default">新</Badge>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                  </div>
+                ) : (
+                  <Alert>
+                    <ShieldCheck className="h-4 w-4" />
+                    <AlertTitle>未读取到磁力链接</AlertTitle>
+                    <AlertDescription>
+                      当前页面可能尚未完全加载，请等待页面渲染完成后点击刷新。
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Category overview */}
+                {snapshot.resources.categories.length > 0 ? (
+                  <Card>
+                    <CardHeader className="p-4 pb-3">
+                      <CardTitle className="text-base">分类概览</CardTitle>
+                      <CardDescription>来自当前页面可见资源分类栏。</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-2 p-4 pt-0">
+                      {snapshot.resources.categories.map((category) => (
+                        <div
+                          key={`${category.label}-${category.count}`}
+                          className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+                        >
                           <span className="truncate">{category.label}</span>
                           <Badge variant="outline">{category.count ?? '未知'}</Badge>
                         </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-muted-foreground">未读取到分类栏。</p>
-                    )}
-                  </CardContent>
-                </Card>
+                      ))}
+                    </CardContent>
+                  </Card>
+                ) : null}
               </div>
             </TabsContent>
 

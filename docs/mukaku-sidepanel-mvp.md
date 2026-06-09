@@ -43,13 +43,13 @@ Allowed:
 - Director, writer, actor names.
 - Rating text and public metadata already visible on the page.
 - Resource tab labels and numeric counts.
+- Magnet links (from API `getVideoDetail.all_seeds[].zlink` or DOM fallback).
+- Seed resource metadata: name, size, quality, date, new flag.
 
 Not allowed in this MVP:
 
-- Magnet links.
 - Torrent file URLs.
 - Netdisk links or extraction codes.
-- Copy/open/download actions for resource links.
 - Background crawling of API endpoints.
 
 ## Implementation

@@ -1,11 +1,10 @@
 {
   "manifest_version": 3,
   "name": "BT0 Extension",
-  "description": "Save the current tab from a Chrome side panel.",
+  "description": "Mukaku detail-page side panel assistant.",
   "version": "0.0.0",
   "permissions": [
     "sidePanel",
-    "storage",
     "tabs",
     "scripting"
   ],
@@ -27,10 +26,11 @@
     "service_worker": "background.js"
   },
   "host_permissions": [
+    "https://web5.mukaku.com/*",
     "http://localhost/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval' http://localhost:3001; object-src 'self';",
-    "sandbox": "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3001; sandbox allow-scripts allow-forms allow-popups allow-modals; child-src 'self';"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval' http://localhost:3000; object-src 'self';",
+    "sandbox": "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3000; sandbox allow-scripts allow-forms allow-popups allow-modals; child-src 'self';"
   }
 }
