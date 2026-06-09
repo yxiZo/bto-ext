@@ -28,8 +28,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getMukakuRouteKind,
   MUKAKU_ORIGIN,
+  MUKAKU_ROUTE_CHANGED_MESSAGE,
   MUKAKU_SNAPSHOT_MESSAGE,
   type MukakuMediaSnapshot,
+  type MukakuRouteChangedMessage,
   type MukakuSnapshotRequest,
 } from '@/lib/mukaku';
 
@@ -201,15 +203,15 @@ function EmptyRouteView({ activeTab, onRefresh }: { activeTab: ActiveTab | null;
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">合规边界</CardTitle>
-          <CardDescription>资源区域只展示分类和数量，不读取具体下载链接。</CardDescription>
+          <CardTitle className="text-base">功能概览</CardTitle>
+          <CardDescription>详情页将展示以下信息并提供磁力链接复制。</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary">元信息</Badge>
             <Badge variant="secondary">评分</Badge>
             <Badge variant="secondary">简介</Badge>
-            <Badge variant="outline">资源概览</Badge>
+            <Badge variant="secondary">磁力链接</Badge>
           </div>
         </CardContent>
       </Card>
@@ -331,8 +333,8 @@ function DetailView({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="flex flex-col gap-3 p-4 pt-0">
-                    <StatRow label="豆瓣" value={compactText(snapshot.ratings.douban)} />
-                    <StatRow label="IMDb" value={compactText(snapshot.ratings.imdb)} />
+                    <StatRow label="豆瓣" value={compactText(snapshot.ratings.sourceA)} />
+                    <StatRow label="IMDb" value={compactText(snapshot.ratings.sourceB)} />
                     <Separator />
                     <StatRow label="上映" value={compactText(snapshot.release)} />
                     <StatRow label="片长" value={compactText(snapshot.duration)} />
@@ -430,14 +432,14 @@ function DetailView({
                             <CardContent className="flex flex-col gap-2 p-3 pt-0">
                               {seeds.map((seed, idx) => (
                                 <div
-                                  key={`${seed.magnet.slice(-20)}-${idx}`}
+                                  key={`${seed.uri.slice(-20)}-${idx}`}
                                   className="flex flex-col gap-1 rounded-md border p-2 text-xs"
                                 >
                                   <div className="flex items-start justify-between gap-2">
                                     <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
                                     <CopyButton
                                       label="复制磁力"
-                                      text={seed.magnet}
+                                      text={seed.uri}
                                     />
                                   </div>
                                   <div className="flex items-center gap-2 text-muted-foreground">
@@ -462,12 +464,12 @@ function DetailView({
                       : /* Flat list when no quality grouping */
                         snapshot.resources.allSeeds.map((seed, idx) => (
                           <div
-                            key={`${seed.magnet.slice(-20)}-${idx}`}
+                            key={`${seed.uri.slice(-20)}-${idx}`}
                             className="flex flex-col gap-1 rounded-md border p-2 text-xs"
                           >
                             <div className="flex items-start justify-between gap-2">
                               <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
-                              <CopyButton label="复制磁力" text={seed.magnet} />
+                              <CopyButton label="复制磁力" text={seed.uri} />
                             </div>
                             <div className="flex items-center gap-2 text-muted-foreground">
                               <span>{seed.size}</span>
@@ -544,7 +546,12 @@ function DetailView({
 function SidePanel() {
   const [state, setState] = React.useState<PanelState>(initialState);
 
+  // Ref to track if a load is in-flight to avoid concurrent requests
+  const loadingRef = React.useRef(false);
+
   const loadState = React.useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setState((current) => ({
       ...current,
       error: null,
@@ -596,11 +603,26 @@ function SidePanel() {
         isLoading: false,
         status: '读取失败',
       }));
+    } finally {
+      loadingRef.current = false;
     }
   }, []);
 
   React.useEffect(() => {
     void loadState();
+  }, [loadState]);
+
+  // Listen for SPA route changes from content script
+  React.useEffect(() => {
+    const handleRouteChange = (message: MukakuRouteChangedMessage) => {
+      if (message?.type !== MUKAKU_ROUTE_CHANGED_MESSAGE) return;
+      void loadState();
+    };
+
+    browser.runtime.onMessage.addListener(handleRouteChange);
+    return () => {
+      browser.runtime.onMessage.removeListener(handleRouteChange);
+    };
   }, [loadState]);
 
   if (state.isLoading) {
