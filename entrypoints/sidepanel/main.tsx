@@ -1,75 +1,102 @@
 import React from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import {
   AlertCircle,
+  BadgeInfo,
+  Clapperboard,
   ExternalLink,
-  FileText,
-  Link2,
-  Loader2,
+  Film,
   RefreshCw,
-  Save,
-  Trash2,
+  ShieldCheck,
+  Tags,
+  Users,
 } from 'lucide-react';
 import { browser } from 'wxt/browser';
 
 import '../style.css';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  getMukakuRouteKind,
+  MUKAKU_ORIGIN,
+  MUKAKU_SNAPSHOT_MESSAGE,
+  type MukakuMediaSnapshot,
+  type MukakuSnapshotRequest,
+} from '@/lib/mukaku';
 
-type SavedPage = {
-  id: string;
+type ActiveTab = {
+  id: number;
   title: string;
   url: string;
-  note: string;
-  createdAt: string;
 };
 
-type ActivePage = {
-  title: string;
-  url: string;
+type PanelState = {
+  activeTab: ActiveTab | null;
+  snapshot: MukakuMediaSnapshot | null;
+  error: string | null;
+  status: string;
+  isLoading: boolean;
 };
 
-const STORAGE_KEY = 'bt0.savedPages';
+const initialState: PanelState = {
+  activeTab: null,
+  snapshot: null,
+  error: null,
+  status: '正在读取当前标签页',
+  isLoading: true,
+};
 
-function createId() {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function normaliseStoredPages(value: unknown): SavedPage[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is SavedPage => {
-    if (!item || typeof item !== 'object') {
-      return false;
-    }
-
-    const page = item as Partial<SavedPage>;
-    return (
-      typeof page.id === 'string' &&
-      typeof page.title === 'string' &&
-      typeof page.url === 'string' &&
-      typeof page.note === 'string' &&
-      typeof page.createdAt === 'string'
-    );
-  });
-}
-
-async function getActivePage(): Promise<ActivePage | null> {
+async function getActiveTab(): Promise<ActiveTab | null> {
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0] ?? (await browser.tabs.query({ active: true, lastFocusedWindow: true }))[0];
 
-  if (!tab?.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://')) {
+  if (!tab?.id || !tab.url) {
     return null;
   }
 
   return {
+    id: tab.id,
     title: tab.title?.trim() || tab.url,
     url: tab.url,
   };
 }
 
-function formatSavedTime(value: string) {
+async function requestSnapshot(tabId: number) {
+  return browser.tabs.sendMessage(tabId, {
+    type: MUKAKU_SNAPSHOT_MESSAGE,
+  } satisfies MukakuSnapshotRequest) as Promise<MukakuMediaSnapshot>;
+}
+
+function routeLabel(snapshot: MukakuMediaSnapshot | null, activeTab: ActiveTab | null) {
+  const routeKind = snapshot?.routeKind ?? (activeTab ? getMukakuRouteKind(activeTab.url) : 'other');
+
+  switch (routeKind) {
+    case 'detail':
+      return '详情页';
+    case 'listing':
+      return '列表页';
+    case 'search':
+      return '搜索页';
+    default:
+      return '非目标页';
+  }
+}
+
+function compactText(value: string | null | undefined) {
+  return value && value !== 'N/A' ? value : '未提供';
+}
+
+function joinPeople(items: string[]) {
+  return items.length ? items.join(' / ') : '未提供';
+}
+
+function formatTime(value: string) {
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -78,32 +105,369 @@ function formatSavedTime(value: string) {
   }).format(new Date(value));
 }
 
+function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 text-right leading-5">{value}</span>
+    </div>
+  );
+}
+
+function LoadingView() {
+  return (
+    <main className="flex min-h-screen flex-col gap-4 bg-background p-4 text-foreground">
+      <Skeleton className="h-9 w-40" />
+      <Skeleton className="h-48 w-full rounded-lg" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-5 w-full" />
+        <Skeleton className="h-5 w-4/5" />
+        <Skeleton className="h-5 w-2/3" />
+      </div>
+    </main>
+  );
+}
+
+function EmptyRouteView({ activeTab, onRefresh }: { activeTab: ActiveTab | null; onRefresh: () => void }) {
+  return (
+    <main className="flex min-h-screen flex-col gap-4 bg-background p-4 text-foreground">
+      <header className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold tracking-tight">BT0 详情助手</h1>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{activeTab?.url ?? '未读取到当前页面'}</p>
+        </div>
+        <Button aria-label="刷新" size="icon" variant="outline" onClick={onRefresh}>
+          <RefreshCw className="h-4 w-4" />
+        </Button>
+      </header>
+
+      <Alert>
+        <BadgeInfo className="h-4 w-4" />
+        <AlertTitle>打开影视详情页后使用</AlertTitle>
+        <AlertDescription>
+          当前页面是{routeLabel(null, activeTab)}。MVP 只在 {MUKAKU_ORIGIN}/mv/:id 页面展示详情快照。
+        </AlertDescription>
+      </Alert>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">合规边界</CardTitle>
+          <CardDescription>资源区域只展示分类和数量，不读取具体下载链接。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary">元信息</Badge>
+            <Badge variant="secondary">评分</Badge>
+            <Badge variant="secondary">简介</Badge>
+            <Badge variant="outline">资源概览</Badge>
+          </div>
+        </CardContent>
+      </Card>
+    </main>
+  );
+}
+
+function ErrorView({ message, onRefresh }: { message: string; onRefresh: () => void }) {
+  return (
+    <main className="flex min-h-screen flex-col gap-4 bg-background p-4 text-foreground">
+      <header className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">BT0 详情助手</h1>
+          <p className="mt-1 text-xs text-muted-foreground">读取失败</p>
+        </div>
+        <Button aria-label="重试" size="icon" variant="outline" onClick={onRefresh}>
+          <RefreshCw className="h-4 w-4" />
+        </Button>
+      </header>
+
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" />
+        <AlertTitle>无法读取页面快照</AlertTitle>
+        <AlertDescription>{message}</AlertDescription>
+      </Alert>
+    </main>
+  );
+}
+
+function DetailView({
+  snapshot,
+  activeTab,
+  status,
+  onRefresh,
+}: {
+  snapshot: MukakuMediaSnapshot;
+  activeTab: ActiveTab;
+  status: string;
+  onRefresh: () => void;
+}) {
+  const seedTotal = snapshot.resources.seedTotal ?? 0;
+  const netdiskTotal = snapshot.resources.netdiskTotal ?? 0;
+  const totalResources = seedTotal + netdiskTotal;
+  const heroTags = [snapshot.year, snapshot.region, snapshot.genre].filter((item): item is string => Boolean(item));
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <ScrollArea className="h-screen">
+        <div className="flex flex-col gap-4 p-4">
+          <header className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-lg font-semibold tracking-tight">BT0 详情助手</h1>
+              <p className="mt-1 truncate text-xs text-muted-foreground">{status}</p>
+            </div>
+            <Button aria-label="刷新详情" size="icon" variant="outline" onClick={onRefresh}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </header>
+
+          <Card className="overflow-hidden">
+            <CardContent className="p-0">
+              <div className="flex gap-3 p-3">
+                <div className="aspect-[2/3] w-24 shrink-0 overflow-hidden rounded-md border bg-muted">
+                  {snapshot.posterUrl ? (
+                    <img
+                      alt={snapshot.title}
+                      className="h-full w-full object-cover"
+                      src={snapshot.posterUrl}
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-muted-foreground">
+                      <Film className="h-7 w-7" />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    <Badge>{routeLabel(snapshot, activeTab)}</Badge>
+                    <Badge variant="outline">ID {snapshot.mediaId ?? '未知'}</Badge>
+                  </div>
+                  <h2 className="line-clamp-3 text-base font-semibold leading-6">{snapshot.title}</h2>
+                  {snapshot.originalTitle ? (
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{snapshot.originalTitle}</p>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {heroTags.slice(0, 5).map((item) => (
+                      <Badge key={item} variant="secondary">
+                        {item}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {!snapshot.pageReady ? (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>页面还没有完全渲染</AlertTitle>
+              <AlertDescription>如果信息缺失，等待页面加载完成后点击右上角刷新。</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <Tabs defaultValue="detail" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="detail">详情</TabsTrigger>
+              <TabsTrigger value="resources">资源</TabsTrigger>
+              <TabsTrigger value="page">页面</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="detail" className="mt-4">
+              <div className="flex flex-col gap-4">
+                <Card>
+                  <CardHeader className="p-4 pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Clapperboard className="h-4 w-4" />
+                      影视信息
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3 p-4 pt-0">
+                    <StatRow label="豆瓣" value={compactText(snapshot.ratings.douban)} />
+                    <StatRow label="IMDb" value={compactText(snapshot.ratings.imdb)} />
+                    <Separator />
+                    <StatRow label="上映" value={compactText(snapshot.release)} />
+                    <StatRow label="片长" value={compactText(snapshot.duration)} />
+                    <StatRow label="集数" value={compactText(snapshot.episodes)} />
+                    <StatRow label="语言" value={compactText(snapshot.language)} />
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="p-4 pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Users className="h-4 w-4" />
+                      演职员
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3 p-4 pt-0">
+                    <StatRow label="导演" value={joinPeople(snapshot.directors)} />
+                    <StatRow label="编剧" value={joinPeople(snapshot.writers)} />
+                    <StatRow label="演员" value={joinPeople(snapshot.actors)} />
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="p-4 pb-3">
+                    <CardTitle className="text-base">剧情简介</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-0">
+                    <p className="text-sm leading-6 text-muted-foreground">{compactText(snapshot.summary)}</p>
+                  </CardContent>
+                </Card>
+
+                {snapshot.tags.length ? (
+                  <Card>
+                    <CardHeader className="p-4 pb-3">
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Tags className="h-4 w-4" />
+                        标签
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-wrap gap-2 p-4 pt-0">
+                      {snapshot.tags.map((tag) => (
+                        <Badge key={tag} variant="secondary">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </CardContent>
+                  </Card>
+                ) : null}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="resources" className="mt-4">
+              <div className="flex flex-col gap-4">
+                <Alert>
+                  <ShieldCheck className="h-4 w-4" />
+                  <AlertTitle>仅展示概览</AlertTitle>
+                  <AlertDescription>这里不会读取或展示具体磁力、种子、网盘链接和提取码。</AlertDescription>
+                </Alert>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <Card>
+                    <CardContent className="p-3 text-center">
+                      <p className="text-xl font-semibold">{totalResources}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">总数</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-3 text-center">
+                      <p className="text-xl font-semibold">{seedTotal}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">种子</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-3 text-center">
+                      <p className="text-xl font-semibold">{netdiskTotal}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">网盘</p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card>
+                  <CardHeader className="p-4 pb-3">
+                    <CardTitle className="text-base">分类概览</CardTitle>
+                    <CardDescription>来自当前页面可见资源分类栏。</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2 p-4 pt-0">
+                    {snapshot.resources.categories.length ? (
+                      snapshot.resources.categories.map((category) => (
+                        <div key={`${category.label}-${category.count}`} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
+                          <span className="truncate">{category.label}</span>
+                          <Badge variant="outline">{category.count ?? '未知'}</Badge>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">未读取到分类栏。</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="page" className="mt-4">
+              <Card>
+                <CardHeader className="p-4 pb-3">
+                  <CardTitle className="text-base">页面状态</CardTitle>
+                  <CardDescription>用于确认插件是否识别到了正确页面。</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3 p-4 pt-0">
+                  <StatRow label="路由" value={routeLabel(snapshot, activeTab)} />
+                  <StatRow label="采集时间" value={formatTime(snapshot.capturedAt)} />
+                  <StatRow label="可见资源项" value={snapshot.resources.visibleItems} />
+                  <Separator />
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs text-muted-foreground">当前 URL</p>
+                    <p className="break-all rounded-md border bg-muted p-2 text-xs leading-5">{snapshot.url}</p>
+                  </div>
+                  <Button variant="outline" className="gap-2" onClick={() => void browser.tabs.create({ url: snapshot.url })}>
+                    <ExternalLink className="h-4 w-4" />
+                    打开新标签
+                  </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </ScrollArea>
+    </main>
+  );
+}
+
 function SidePanel() {
-  const [activePage, setActivePage] = React.useState<ActivePage | null>(null);
-  const [savedPages, setSavedPages] = React.useState<SavedPage[]>([]);
-  const [note, setNote] = React.useState('');
-  const [status, setStatus] = React.useState('正在读取当前标签页');
-  const [error, setError] = React.useState<string | null>(null);
-  const [isBusy, setIsBusy] = React.useState(true);
+  const [state, setState] = React.useState<PanelState>(initialState);
 
   const loadState = React.useCallback(async () => {
-    setIsBusy(true);
-    setError(null);
+    setState((current) => ({
+      ...current,
+      error: null,
+      isLoading: true,
+      status: '正在读取当前标签页',
+    }));
 
     try {
-      const [page, stored] = await Promise.all([
-        getActivePage(),
-        browser.storage.local.get(STORAGE_KEY) as Promise<Record<string, unknown>>,
-      ]);
+      const activeTab = await getActiveTab();
 
-      setActivePage(page);
-      setSavedPages(normaliseStoredPages(stored[STORAGE_KEY]));
-      setStatus(page ? '当前页已就绪' : '当前页面不可保存');
+      if (!activeTab) {
+        setState({
+          activeTab: null,
+          snapshot: null,
+          error: null,
+          isLoading: false,
+          status: '未读取到当前标签页',
+        });
+        return;
+      }
+
+      const routeKind = getMukakuRouteKind(activeTab.url);
+
+      if (routeKind !== 'detail') {
+        setState({
+          activeTab,
+          snapshot: null,
+          error: null,
+          isLoading: false,
+          status: '当前不是 Mukaku 详情页',
+        });
+        return;
+      }
+
+      const snapshot = await requestSnapshot(activeTab.id);
+
+      setState({
+        activeTab,
+        snapshot,
+        error: null,
+        isLoading: false,
+        status: snapshot.pageReady ? '详情快照已就绪' : '详情页仍在渲染',
+      });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '读取扩展状态失败');
-      setStatus('读取失败');
-    } finally {
-      setIsBusy(false);
+      setState((current) => ({
+        ...current,
+        snapshot: null,
+        error: cause instanceof Error ? cause.message : '读取页面快照失败',
+        isLoading: false,
+        status: '读取失败',
+      }));
     }
   }, []);
 
@@ -111,135 +475,25 @@ function SidePanel() {
     void loadState();
   }, [loadState]);
 
-  async function persistPages(nextPages: SavedPage[]) {
-    setSavedPages(nextPages);
-    await browser.storage.local.set({ [STORAGE_KEY]: nextPages });
+  if (state.isLoading) {
+    return <LoadingView />;
   }
 
-  async function saveCurrentPage() {
-    if (!activePage) {
-      return;
-    }
-
-    setIsBusy(true);
-    setError(null);
-
-    try {
-      const nextPages = [
-        {
-          id: createId(),
-          title: activePage.title,
-          url: activePage.url,
-          note: note.trim(),
-          createdAt: new Date().toISOString(),
-        },
-        ...savedPages,
-      ];
-
-      await persistPages(nextPages);
-      setNote('');
-      setStatus('已保存当前页');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '保存失败');
-      setStatus('保存失败');
-    } finally {
-      setIsBusy(false);
-    }
+  if (state.error) {
+    return <ErrorView message={state.error} onRefresh={() => void loadState()} />;
   }
 
-  async function removePage(id: string) {
-    const nextPages = savedPages.filter((page) => page.id !== id);
-    await persistPages(nextPages);
-    setStatus('已删除记录');
-  }
-
-  async function openPage(url: string) {
-    await browser.tabs.create({ url });
+  if (!state.snapshot || !state.activeTab) {
+    return <EmptyRouteView activeTab={state.activeTab} onRefresh={() => void loadState()} />;
   }
 
   return (
-    <main className="min-h-screen bg-background px-4 py-5 text-foreground">
-      <header className="mb-5 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold tracking-tight">BT0 采集箱</h1>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{status}</p>
-        </div>
-        <Button aria-label="刷新当前页" size="icon" variant="outline" onClick={() => void loadState()} disabled={isBusy}>
-          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-        </Button>
-      </header>
-
-      {error ? (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      <section className="mb-5 space-y-3 border-b pb-5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Link2 className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="line-clamp-2 text-sm font-medium">
-              {activePage?.title ?? '未读取到可保存页面'}
-            </p>
-            <p className="mt-1 truncate text-xs text-muted-foreground">{activePage?.url ?? '打开普通网页后刷新侧边栏'}</p>
-          </div>
-        </div>
-
-        <textarea
-          className="min-h-24 w-full resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background transition-shadow placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          maxLength={240}
-          placeholder="给当前页加一条备注"
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-        />
-
-        <Button className="w-full gap-2" onClick={() => void saveCurrentPage()} disabled={!activePage || isBusy}>
-          <Save className="h-4 w-4" />
-          保存当前页
-        </Button>
-      </section>
-
-      <section>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">已保存</h2>
-          <span className="text-xs text-muted-foreground">{savedPages.length} 条</span>
-        </div>
-
-        {savedPages.length === 0 ? (
-          <div className="flex min-h-32 flex-col items-center justify-center rounded-md border border-dashed px-5 text-center text-sm text-muted-foreground">
-            <FileText className="mb-3 h-5 w-5" />
-            暂无记录
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {savedPages.map((page) => (
-              <article key={page.id} className="rounded-md border bg-card p-3 text-card-foreground shadow-sm">
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="line-clamp-2 text-sm font-medium leading-5">{page.title}</h3>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">{page.url}</p>
-                  </div>
-                  <div className="flex shrink-0 gap-1">
-                    <Button aria-label="打开记录" size="icon" variant="ghost" onClick={() => void openPage(page.url)}>
-                      <ExternalLink className="h-4 w-4" />
-                    </Button>
-                    <Button aria-label="删除记录" size="icon" variant="ghost" onClick={() => void removePage(page.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                {page.note ? <p className="mt-3 text-sm leading-6">{page.note}</p> : null}
-                <p className="mt-3 text-xs text-muted-foreground">{formatSavedTime(page.createdAt)}</p>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-    </main>
+    <DetailView
+      activeTab={state.activeTab}
+      snapshot={state.snapshot}
+      status={state.status}
+      onRefresh={() => void loadState()}
+    />
   );
 }
 
@@ -249,7 +503,14 @@ if (!root) {
   throw new Error('Root element #root was not found.');
 }
 
-createRoot(root).render(
+const rootStore = globalThis as typeof globalThis & {
+  __BT0_SIDE_PANEL_ROOT__?: Root;
+};
+
+const reactRoot = rootStore.__BT0_SIDE_PANEL_ROOT__ ?? createRoot(root);
+rootStore.__BT0_SIDE_PANEL_ROOT__ = reactRoot;
+
+reactRoot.render(
   <React.StrictMode>
     <SidePanel />
   </React.StrictMode>,

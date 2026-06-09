@@ -4,8 +4,8 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'BT0 Extension',
-    description: 'Save the current tab from a Chrome side panel.',
-    permissions: ['sidePanel', 'storage', 'tabs'],
+    description: 'Mukaku detail-page side panel assistant.',
+    permissions: ['sidePanel', 'tabs'],
     action: {
       default_title: 'BT0 Extension',
     },
