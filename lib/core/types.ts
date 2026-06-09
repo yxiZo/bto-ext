@@ -63,6 +63,10 @@ export type MediaSnapshot = {
     seedsByQuality: Record<string, SeedResource[]>;
     /** Flat list of all seeds */
     allSeeds: SeedResource[];
+    /** URIs of recommended seeds */
+    recommendedSeeds: string[];
+    /** Reasons keyed by seed URI */
+    recommendationReasons: Record<string, string>;
   };
   /** Route kind from the site adapter */
   routeKind: RouteKind;
@@ -101,6 +105,8 @@ export function emptySnapshot(url: string, routeKind: RouteKind): MediaSnapshot 
       visibleItems: 0,
       seedsByQuality: {},
       allSeeds: [],
+      recommendedSeeds: [],
+      recommendationReasons: {},
     },
     routeKind,
     pageReady: false,

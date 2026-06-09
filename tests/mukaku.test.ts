@@ -23,6 +23,12 @@ describe('Mukaku route helpers', () => {
     assert.equal(mukakuAdapter.detectRouteKind('https://web5.mukaku.com/tvseries/0_0_0_0_0_1_1_0_0x10_0_0.html'), 'listing');
   });
 
+  it('detects detail routes on all mirror domains', () => {
+    for (const host of ['web5.mukaku.com', 'www.0bt0.com', 'www.9bt0.com']) {
+      assert.equal(mukakuAdapter.detectRouteKind(`https://${host}/mv/123`), 'detail');
+    }
+  });
+
   it('rejects unknown and offsite routes', () => {
     assert.equal(mukakuAdapter.detectRouteKind('https://web5.mukaku.com/notice/1.html'), 'other');
     assert.equal(mukakuAdapter.detectRouteKind('https://example.com/mv/123456'), 'other');
@@ -36,6 +42,9 @@ describe('Mukaku constants', () => {
     assert.equal(MUKAKU_CONSTANTS.API_BASE, '/prod/api/v1');
     assert.equal(MUKAKU_CONSTANTS.APP_ID, '83768d9ad4');
     assert.equal(MUKAKU_CONSTANTS.IDENTITY, '23734adac0301bccdcb107c4aa21f96c');
+    assert.ok(MUKAKU_CONSTANTS.MIRROR_HOSTNAMES.includes('www.0bt0.com'));
+    assert.ok(MUKAKU_CONSTANTS.MIRROR_HOSTNAMES.includes('web5.mukaku.com'));
+    assert.equal(MUKAKU_CONSTANTS.MIRROR_HOSTNAMES.length, 11);
   });
 });
 

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Mukaku (web5.mukaku.com) site adapter
+// Mukaku / BT0 mirror sites — all share the same backend & page structure
 // ---------------------------------------------------------------------------
 
 import type { SiteAdapter } from '../types.ts';
@@ -10,16 +10,24 @@ import { emptySnapshot } from '../../core/types.ts';
 // Constants
 // ===========================================================================
 
-const MUKAKU_ORIGIN = 'https://web5.mukaku.com';
+/** All known BT0 mirror hostnames */
+export const MIRROR_HOSTNAMES = [
+  'web5.mukaku.com',
+  'www.0bt0.com', 'www.1bt0.com', 'www.2bt0.com', 'www.3bt0.com', 'www.4bt0.com',
+  'www.5bt0.com', 'www.6bt0.com', 'www.7bt0.com', 'www.8bt0.com', 'www.9bt0.com',
+];
+
+const MUKAKU_ORIGIN = `https://${MIRROR_HOSTNAMES[0]}`;
 const API_BASE = '/prod/api/v1';
 const APP_ID = '83768d9ad4';
 const IDENTITY = '23734adac0301bccdcb107c4aa21f96c';
 
+function isMirrorHost(hostname: string) { return MIRROR_HOSTNAMES.includes(hostname); }
+
 export const MUKAKU_CONSTANTS = {
   ORIGIN: MUKAKU_ORIGIN,
-  API_BASE,
-  APP_ID,
-  IDENTITY,
+  API_BASE, APP_ID, IDENTITY,
+  MIRROR_HOSTNAMES,
 } as const;
 
 // ===========================================================================
@@ -29,7 +37,7 @@ export const MUKAKU_CONSTANTS = {
 function detectRouteKind(url: string): RouteKind {
   try {
     const parsed = new URL(url);
-    if (parsed.hostname !== 'web5.mukaku.com') return 'other';
+    if (!isMirrorHost(parsed.hostname)) return 'other';
 
     if (/^\/mv\/[^/]+/.test(parsed.pathname)) return 'detail';
     if (parsed.pathname === '/search') return 'search';
@@ -253,6 +261,109 @@ async function fetchSeeds(mediaId: string): Promise<SeedResource[]> {
   return seeds;
 }
 
+// ===========================================================================
+// Smart recommendation — scores seeds within each quality group
+// ===========================================================================
+
+/** Per-seed recommendation metadata */
+export type SeedRecommendation = {
+  /** Whether this seed is the recommended pick in its quality group */
+  isRecommended: boolean;
+  /** Human-readable reason for the recommendation */
+  reason: string;
+  /** Numeric score (higher = better) */
+  score: number;
+};
+
+/** Extended seed resource with recommendation attached */
+export type RecommendedSeed = SeedResource & { recommendation: SeedRecommendation };
+
+/** Score a single seed. Higher = better pick. */
+function scoreSeed(seed: SeedResource, allInGroup: SeedResource[]): { score: number; reasons: string[] } {
+  let score = 50;
+  const reasons: string[] = [];
+
+  const name = seed.name;
+  const sizeStr = seed.size;
+
+  // --- Audio tracks ---
+  const hasMultiAudio = /国粤|多音轨|双音轨|双語|国英|中日/i.test(name);
+  const hasAudioHint = /音轨|audio/i.test(name);
+  if (hasMultiAudio) { score += 15; reasons.push('多音轨'); }
+  else if (hasAudioHint) { score += 5; }
+
+  // --- Subtitles ---
+  const hasSubs = /简繁|字幕|中字|中英|CHS|CHT|SUBS?/i.test(name);
+  if (hasSubs) { score += 10; reasons.push('含字幕'); }
+
+  // --- Size: prefer moderate (not largest, not smallest in group) ---
+  if (allInGroup.length >= 3) {
+    const sizes = allInGroup.map((s) => parseSizeGB(s.size)).filter((s) => s > 0).sort((a, b) => a - b);
+    const ownSize = parseSizeGB(sizeStr);
+    if (sizes.length >= 3 && ownSize > 0) {
+      const q1 = sizes[Math.floor(sizes.length * 0.25)];
+      const q3 = sizes[Math.floor(sizes.length * 0.75)];
+      if (ownSize >= q1 && ownSize <= q3) {
+        score += 8;
+        reasons.push('大小适中');
+      } else if (ownSize < sizes[0] * 0.5) {
+        score -= 10; // suspiciously small
+      }
+    }
+  }
+
+  // --- Prefer newer ---
+  if (seed.isNew) { score += 3; }
+  if (seed.addedAt) {
+    const ageDays = (Date.now() - new Date(seed.addedAt).getTime()) / 86400000;
+    if (ageDays < 30) { score += 5; }
+    else if (ageDays < 90) { score += 2; }
+  }
+
+  // --- Encoding hints ---
+  if (/x265|HEVC|H\.?265/i.test(name)) { score += 3; reasons.push('H.265'); }
+  if (/DTS|DDP|TrueHD|Atmos|FLAC/i.test(name)) { score += 2; }
+  if (/CHD|WiKi|DreamHD|SSDSSE|TAGWEB/i.test(name)) { score += 2; }
+
+  return { score, reasons };
+}
+
+function parseSizeGB(sizeStr: string): number {
+  const m = sizeStr.match(/([\d.]+)\s*(GB|TB|MB)/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  if (m[2].toUpperCase() === 'TB') return n * 1024;
+  if (m[2].toUpperCase() === 'MB') return n / 1024;
+  return n;
+}
+
+function recommendSeeds(seeds: SeedResource[]): RecommendedSeed[] {
+  // Group by quality for relative scoring
+  const byQuality = groupSeedsByQuality(seeds);
+
+  const recommendedUris = new Set<string>();
+  // Pick the best in each quality group
+  for (const [, group] of Object.entries(byQuality)) {
+    if (group.length === 0) continue;
+    const scored = group.map((s) => ({ seed: s, ...scoreSeed(s, group) }));
+    scored.sort((a, b) => b.score - a.score);
+    if (scored[0]) recommendedUris.add(scored[0].seed.uri);
+  }
+
+  return seeds.map((seed) => {
+    const { score, reasons } = scoreSeed(seed, seeds);
+    const isRecommended = recommendedUris.has(seed.uri);
+    return {
+      ...seed,
+      recommendation: {
+        isRecommended,
+        reason: isRecommended ? reasons.slice(0, 3).join(' · ') : '',
+        score,
+      },
+    };
+  });
+}
+
 function groupSeedsByQuality(seeds: SeedResource[]): Record<string, SeedResource[]> {
   return seeds.reduce<Record<string, SeedResource[]>>((acc, s) => {
     (acc[s.quality || '其他'] ??= []).push(s);
@@ -300,8 +411,16 @@ async function buildSnapshot(): Promise<MediaSnapshot> {
   if (mediaId && routeKind === 'detail') {
     try {
       const seeds = await fetchSeeds(mediaId);
-      snapshot.resources.allSeeds = seeds;
-      snapshot.resources.seedsByQuality = groupSeedsByQuality(seeds);
+      const recommended = recommendSeeds(seeds);
+      snapshot.resources.allSeeds = recommended;
+      snapshot.resources.seedsByQuality = groupSeedsByQuality(recommended);
+      snapshot.resources.recommendedSeeds = recommended
+        .filter((s) => s.recommendation.isRecommended)
+        .map((s) => s.uri);
+      snapshot.resources.recommendationReasons = Object.fromEntries(
+        recommended.filter((s) => s.recommendation.isRecommended && s.recommendation.reason)
+          .map((s) => [s.uri, s.recommendation.reason]),
+      );
     } catch { /* seeds are optional */ }
   }
 
@@ -323,7 +442,7 @@ export const mukakuAdapter: SiteAdapter = {
   id: 'mukaku',
   name: 'Mukaku',
   origin: MUKAKU_ORIGIN,
-  matchPatterns: ['https://web5.mukaku.com/*'],
+  matchPatterns: MIRROR_HOSTNAMES.flatMap((h) => [`https://${h}/*`, `http://${h}/*`]),
 
   detectRouteKind,
   extractMediaId,

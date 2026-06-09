@@ -7,14 +7,18 @@
 //   @/lib/adapters/types
 // ===========================================================================
 
-export const MUKAKU_ORIGIN = 'https://web5.mukaku.com';
+import { MIRROR_HOSTNAMES } from '@/lib/adapters/sites/mukaku';
+
+export const MUKAKU_ORIGIN = `https://${MIRROR_HOSTNAMES[0]}`;
 export const MUKAKU_SNAPSHOT_MESSAGE = 'BT0_GET_SNAPSHOT';
 export const MUKAKU_ROUTE_CHANGED_MESSAGE = 'BT0_ROUTE_CHANGED';
+
+function isMirrorHost(h: string) { return MIRROR_HOSTNAMES.includes(h); }
 
 export function getMukakuRouteKind(url: string): import('@/lib/core/types').RouteKind {
   try {
     const p = new URL(url);
-    if (p.hostname !== 'web5.mukaku.com') return 'other';
+    if (!isMirrorHost(p.hostname)) return 'other';
     if (/^\/mv\/[^/]+/.test(p.pathname)) return 'detail';
     if (p.pathname === '/search') return 'search';
     if (/^\/(movie|tvseries)\/.+\.html$/.test(p.pathname)) return 'listing';

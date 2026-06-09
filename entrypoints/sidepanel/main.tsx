@@ -5,12 +5,14 @@ import {
   BadgeInfo,
   Check,
   Clapperboard,
+  Cloud,
   Copy,
   ExternalLink,
   Film,
   Magnet,
   RefreshCw,
   ShieldCheck,
+  Star,
   Tags,
   Users,
 } from 'lucide-react';
@@ -27,13 +29,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getMukakuRouteKind,
-  MUKAKU_ORIGIN,
   MUKAKU_ROUTE_CHANGED_MESSAGE,
   MUKAKU_SNAPSHOT_MESSAGE,
   type MukakuMediaSnapshot,
   type MukakuRouteChangedMessage,
   type MukakuSnapshotRequest,
 } from '@/lib/mukaku';
+import { adapter115 } from '@/lib/adapters/clouds/115';
+import type { CloudConnectionStatus } from '@/lib/adapters/types';
 
 type ActiveTab = {
   id: number;
@@ -157,6 +160,52 @@ function CopyButton({ text, label = '复制' }: { text: string; label?: string }
   );
 }
 
+function Push115Button({ uri, name }: { uri: string; name: string }) {
+  const [status, setStatus] = React.useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
+  const [errorMsg, setErrorMsg] = React.useState('');
+
+  const handlePush = React.useCallback(async () => {
+    setStatus('pushing');
+    const result = await adapter115.submitOfflineTask(uri, name);
+    if (result.success) {
+      setStatus('done');
+      setTimeout(() => setStatus('idle'), 3000);
+    } else {
+      setStatus('error');
+      setErrorMsg(result.error ?? '推送失败');
+      setTimeout(() => setStatus('idle'), 3000);
+    }
+  }, [uri, name]);
+
+  if (status === 'done') {
+    return (
+      <Button aria-label="已推送" className="h-7 gap-1 text-xs" size="sm" variant="default" disabled>
+        <Check className="h-3 w-3" />已推送
+      </Button>
+    );
+  }
+
+  return (
+    <Button
+      aria-label={status === 'error' ? errorMsg : '推送到115'}
+      className="h-7 gap-1 text-xs"
+      size="sm"
+      variant={status === 'error' ? 'destructive' : 'outline'}
+      disabled={status === 'pushing'}
+      onClick={handlePush}
+    >
+      {status === 'pushing' ? (
+        <RefreshCw className="h-3 w-3 animate-spin" />
+      ) : status === 'error' ? (
+        <AlertCircle className="h-3 w-3" />
+      ) : (
+        <Cloud className="h-3 w-3" />
+      )}
+      {status === 'pushing' ? '推送中' : status === 'error' ? errorMsg.slice(0, 6) : '推送到115'}
+    </Button>
+  );
+}
+
 function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3 text-sm">
@@ -197,7 +246,7 @@ function EmptyRouteView({ activeTab, onRefresh }: { activeTab: ActiveTab | null;
         <BadgeInfo className="h-4 w-4" />
         <AlertTitle>打开影视详情页后使用</AlertTitle>
         <AlertDescription>
-          当前页面是{routeLabel(null, activeTab)}。MVP 只在 {MUKAKU_ORIGIN}/mv/:id 页面展示详情快照。
+          当前页面是{routeLabel(null, activeTab)}。请打开影视详情页 (/mv/:id) 使用。
         </AlertDescription>
       </Alert>
 
@@ -245,11 +294,13 @@ function DetailView({
   snapshot,
   activeTab,
   status,
+  cloud115,
   onRefresh,
 }: {
   snapshot: MukakuMediaSnapshot;
   activeTab: ActiveTab;
   status: string;
+  cloud115: CloudConnectionStatus;
   onRefresh: () => void;
 }) {
   const seedTotal = snapshot.resources.seedTotal ?? 0;
@@ -266,9 +317,20 @@ function DetailView({
               <h1 className="text-lg font-semibold tracking-tight">BT0 详情助手</h1>
               <p className="mt-1 truncate text-xs text-muted-foreground">{status}</p>
             </div>
-            <Button aria-label="刷新详情" size="icon" variant="outline" onClick={onRefresh}>
-              <RefreshCw className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-2">
+              {cloud115.connected ? (
+                <Badge variant="outline" className="gap-1 text-xs">
+                  <Cloud className="h-3 w-3" />115
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="gap-1 text-xs text-muted-foreground">
+                  <Cloud className="h-3 w-3" />115 未连接
+                </Badge>
+              )}
+              <Button aria-label="刷新详情" size="icon" variant="outline" onClick={onRefresh}>
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
           </header>
 
           <Card className="overflow-hidden">
@@ -430,46 +492,67 @@ function DetailView({
                               </CardTitle>
                             </CardHeader>
                             <CardContent className="flex flex-col gap-2 p-3 pt-0">
-                              {seeds.map((seed, idx) => (
+                              {seeds.map((seed, idx) => {
+                                const isRec = snapshot.resources.recommendedSeeds.includes(seed.uri);
+                                const recReason = snapshot.resources.recommendationReasons[seed.uri];
+                                return (
                                 <div
                                   key={`${seed.uri.slice(-20)}-${idx}`}
-                                  className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                                  className={`flex flex-col gap-1 rounded-md border p-2 text-xs ${isRec ? 'border-green-500/50 bg-green-50 dark:bg-green-950/20' : ''}`}
                                 >
+                                  {isRec ? (
+                                    <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                                      <Star className="h-3 w-3 fill-current" />
+                                      <span className="font-medium">推荐</span>
+                                      {recReason ? <span className="text-muted-foreground">· {recReason}</span> : null}
+                                    </div>
+                                  ) : null}
                                   <div className="flex items-start justify-between gap-2">
                                     <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
-                                    <CopyButton
-                                      label="复制磁力"
-                                      text={seed.uri}
-                                    />
+                                    <div className="flex shrink-0 gap-1">
+                                      <CopyButton label="复制磁力" text={seed.uri} />
+                                      {cloud115.connected ? (
+                                        <Push115Button uri={seed.uri} name={seed.name} />
+                                      ) : null}
+                                    </div>
                                   </div>
                                   <div className="flex items-center gap-2 text-muted-foreground">
                                     <span>{seed.size}</span>
-                                    {seed.addedAt ? (
-                                      <>
-                                        <span>·</span>
-                                        <span>{seed.addedAt}</span>
-                                      </>
-                                    ) : null}
+                                    {seed.addedAt ? <><span>·</span><span>{seed.addedAt}</span></> : null}
                                     {seed.isNew ? (
-                                      <Badge className="h-4 px-1 text-[10px]" variant="default">
-                                        新
-                                      </Badge>
+                                      <Badge className="h-4 px-1 text-[10px]" variant="default">新</Badge>
                                     ) : null}
                                   </div>
                                 </div>
-                              ))}
+                                );
+                              })}
                             </CardContent>
                           </Card>
                         ))
                       : /* Flat list when no quality grouping */
-                        snapshot.resources.allSeeds.map((seed, idx) => (
+                        snapshot.resources.allSeeds.map((seed, idx) => {
+                          const isRec = snapshot.resources.recommendedSeeds.includes(seed.uri);
+                          const recReason = snapshot.resources.recommendationReasons[seed.uri];
+                          return (
                           <div
                             key={`${seed.uri.slice(-20)}-${idx}`}
-                            className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                            className={`flex flex-col gap-1 rounded-md border p-2 text-xs ${isRec ? 'border-green-500/50 bg-green-50 dark:bg-green-950/20' : ''}`}
                           >
+                            {isRec ? (
+                              <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                                <Star className="h-3 w-3 fill-current" />
+                                <span className="font-medium">推荐</span>
+                                {recReason ? <span className="text-muted-foreground">· {recReason}</span> : null}
+                              </div>
+                            ) : null}
                             <div className="flex items-start justify-between gap-2">
                               <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
-                              <CopyButton label="复制磁力" text={seed.uri} />
+                              <div className="flex shrink-0 gap-1">
+                                <CopyButton label="复制磁力" text={seed.uri} />
+                                {cloud115.connected ? (
+                                  <Push115Button uri={seed.uri} name={seed.name} />
+                                ) : null}
+                              </div>
                             </div>
                             <div className="flex items-center gap-2 text-muted-foreground">
                               <span>{seed.size}</span>
@@ -479,7 +562,8 @@ function DetailView({
                               ) : null}
                             </div>
                           </div>
-                        ))}
+                          );
+                        })}
                   </div>
                 ) : (
                   <Alert>
@@ -545,6 +629,7 @@ function DetailView({
 
 function SidePanel() {
   const [state, setState] = React.useState<PanelState>(initialState);
+  const [cloud115, setCloud115] = React.useState<CloudConnectionStatus>({ connected: false });
 
   // Ref to track if a load is in-flight to avoid concurrent requests
   const loadingRef = React.useRef(false);
@@ -612,6 +697,11 @@ function SidePanel() {
     void loadState();
   }, [loadState]);
 
+  // Check 115 connection on mount
+  React.useEffect(() => {
+    adapter115.checkConnection().then(setCloud115).catch(() => setCloud115({ connected: false }));
+  }, []);
+
   // Listen for SPA route changes from content script
   React.useEffect(() => {
     const handleRouteChange = (message: MukakuRouteChangedMessage) => {
@@ -642,6 +732,7 @@ function SidePanel() {
       activeTab={state.activeTab}
       snapshot={state.snapshot}
       status={state.status}
+      cloud115={cloud115}
       onRefresh={() => void loadState()}
     />
   );
