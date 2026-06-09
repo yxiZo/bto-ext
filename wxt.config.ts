@@ -13,5 +13,9 @@ export default defineConfig({
     side_panel: {
       default_path: 'sidepanel.html',
     },
+    options_ui: {
+      page: 'settings.html',
+      open_in_tab: true,
+    },
   },
 });
