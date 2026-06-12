@@ -72,6 +72,8 @@ export type MediaSnapshot = {
   routeKind: RouteKind;
   /** Whether the page DOM was fully ready when scraped */
   pageReady: boolean;
+  /** Whether magnet/resource details have been fetched */
+  resourcesReady: boolean;
   /** ISO timestamp of capture */
   capturedAt: string;
 };
@@ -110,6 +112,7 @@ export function emptySnapshot(url: string, routeKind: RouteKind): MediaSnapshot 
     },
     routeKind,
     pageReady: false,
+    resourcesReady: false,
     capturedAt: new Date().toISOString(),
   };
 }

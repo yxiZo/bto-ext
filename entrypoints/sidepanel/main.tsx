@@ -29,9 +29,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getMukakuRouteKind,
+  MUKAKU_PAGE_UPDATED_MESSAGE,
   MUKAKU_ROUTE_CHANGED_MESSAGE,
   MUKAKU_SNAPSHOT_MESSAGE,
   type MukakuMediaSnapshot,
+  type MukakuPageUpdatedMessage,
   type MukakuRouteChangedMessage,
   type MukakuSnapshotRequest,
 } from '@/lib/mukaku';
@@ -49,7 +51,9 @@ type PanelState = {
   snapshot: MukakuMediaSnapshot | null;
   error: string | null;
   status: string;
-  isLoading: boolean;
+  isBooting: boolean;
+  isRefreshing: boolean;
+  isLoadingResources: boolean;
 };
 
 const initialState: PanelState = {
@@ -57,7 +61,9 @@ const initialState: PanelState = {
   snapshot: null,
   error: null,
   status: '正在读取当前标签页',
-  isLoading: true,
+  isBooting: true,
+  isRefreshing: false,
+  isLoadingResources: false,
 };
 
 async function getActiveTab(): Promise<ActiveTab | null> {
@@ -75,9 +81,10 @@ async function getActiveTab(): Promise<ActiveTab | null> {
   };
 }
 
-async function requestSnapshot(tabId: number) {
+async function requestSnapshot(tabId: number, mode: MukakuSnapshotRequest['mode']) {
   return browser.tabs.sendMessage(tabId, {
     type: MUKAKU_SNAPSHOT_MESSAGE,
+    mode,
   } satisfies MukakuSnapshotRequest) as Promise<MukakuMediaSnapshot>;
 }
 
@@ -111,6 +118,23 @@ function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function mergeResourceSnapshot(
+  current: MukakuMediaSnapshot | null,
+  resources: MukakuMediaSnapshot,
+): MukakuMediaSnapshot {
+  if (!current || current.mediaId !== resources.mediaId || current.url !== resources.url) {
+    return resources;
+  }
+
+  return {
+    ...current,
+    resources: resources.resources,
+    resourcesReady: resources.resourcesReady,
+    pageReady: current.pageReady || resources.pageReady,
+    capturedAt: resources.capturedAt,
+  };
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -229,7 +253,7 @@ function LoadingView() {
   );
 }
 
-function EmptyRouteView({ activeTab, onRefresh }: { activeTab: ActiveTab | null; onRefresh: () => void }) {
+function EmptyRouteView({ activeTab }: { activeTab: ActiveTab | null }) {
   return (
     <main className="flex min-h-screen flex-col gap-4 bg-background p-4 text-foreground">
       <header className="flex items-center justify-between gap-3">
@@ -237,9 +261,10 @@ function EmptyRouteView({ activeTab, onRefresh }: { activeTab: ActiveTab | null;
           <h1 className="text-lg font-semibold tracking-tight">BT0 详情助手</h1>
           <p className="mt-1 truncate text-xs text-muted-foreground">{activeTab?.url ?? '未读取到当前页面'}</p>
         </div>
-        <Button aria-label="刷新" size="icon" variant="outline" onClick={onRefresh}>
-          <RefreshCw className="h-4 w-4" />
-        </Button>
+        <Badge variant="outline" className="gap-1 text-xs">
+          <RefreshCw className="h-3 w-3" />
+          自动监听
+        </Badge>
       </header>
 
       <Alert>
@@ -268,7 +293,7 @@ function EmptyRouteView({ activeTab, onRefresh }: { activeTab: ActiveTab | null;
   );
 }
 
-function ErrorView({ message, onRefresh }: { message: string; onRefresh: () => void }) {
+function ErrorView({ message }: { message: string }) {
   return (
     <main className="flex min-h-screen flex-col gap-4 bg-background p-4 text-foreground">
       <header className="flex items-center justify-between gap-3">
@@ -276,9 +301,10 @@ function ErrorView({ message, onRefresh }: { message: string; onRefresh: () => v
           <h1 className="text-lg font-semibold tracking-tight">BT0 详情助手</h1>
           <p className="mt-1 text-xs text-muted-foreground">读取失败</p>
         </div>
-        <Button aria-label="重试" size="icon" variant="outline" onClick={onRefresh}>
-          <RefreshCw className="h-4 w-4" />
-        </Button>
+        <Badge variant="outline" className="gap-1 text-xs">
+          <RefreshCw className="h-3 w-3 animate-spin" />
+          自动重试
+        </Badge>
       </header>
 
       <Alert variant="destructive">
@@ -294,15 +320,17 @@ function DetailView({
   snapshot,
   activeTab,
   status,
+  isRefreshing,
+  isLoadingResources,
   cloud115,
-  onRefresh,
   onRecheckCloud,
 }: {
   snapshot: MukakuMediaSnapshot;
   activeTab: ActiveTab;
   status: string;
+  isRefreshing: boolean;
+  isLoadingResources: boolean;
   cloud115: CloudConnectionStatus;
-  onRefresh: () => void;
   onRecheckCloud: () => void;
 }) {
   const seedTotal = snapshot.resources.seedTotal ?? 0;
@@ -329,9 +357,17 @@ function DetailView({
                   <Server className="h-3 w-3" />115 未连接
                 </Badge>
               )}
-              <Button aria-label="刷新详情" size="icon" variant="outline" onClick={onRefresh}>
-                <RefreshCw className="h-4 w-4" />
-              </Button>
+              {isRefreshing || isLoadingResources ? (
+                <Badge variant="secondary" className="gap-1 text-xs">
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                  同步中
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="gap-1 text-xs">
+                  <RefreshCw className="h-3 w-3" />
+                  自动
+                </Badge>
+              )}
             </div>
           </header>
 
@@ -376,7 +412,7 @@ function DetailView({
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>页面还没有完全渲染</AlertTitle>
-              <AlertDescription>如果信息缺失，等待页面加载完成后点击右上角刷新。</AlertDescription>
+              <AlertDescription>插件会在页面继续渲染时自动同步最新信息。</AlertDescription>
             </Alert>
           ) : null}
 
@@ -505,7 +541,15 @@ function DetailView({
                 ) : null}
 
                 {/* Magnet links — grouped by quality */}
-                {snapshot.resources.allSeeds.length > 0 ? (
+                {isLoadingResources && snapshot.resources.allSeeds.length === 0 ? (
+                  <Card>
+                    <CardContent className="flex flex-col gap-2 p-4">
+                      <Skeleton className="h-5 w-32" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </CardContent>
+                  </Card>
+                ) : snapshot.resources.allSeeds.length > 0 ? (
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center gap-2">
                       <Magnet className="h-4 w-4 text-muted-foreground" />
@@ -603,7 +647,7 @@ function DetailView({
                     <ShieldCheck className="h-4 w-4" />
                     <AlertTitle>未读取到磁力链接</AlertTitle>
                     <AlertDescription>
-                      当前页面可能尚未完全加载，请等待页面渲染完成后点击刷新。
+                      当前页面暂未提供可用磁力链接，插件会在页面更新后自动同步。
                     </AlertDescription>
                   </Alert>
                 )}
@@ -665,28 +709,60 @@ function SidePanel() {
   const [state, setState] = React.useState<PanelState>(initialState);
   const [cloud115, setCloud115] = React.useState<CloudConnectionStatus>({ connected: false });
 
-  // Ref to track if a load is in-flight to avoid concurrent requests
-  const loadingRef = React.useRef(false);
+  const requestSeqRef = React.useRef(0);
+  const resourcesSeqRef = React.useRef(0);
+  const refreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadState = React.useCallback(async () => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
+  const loadResources = React.useCallback(async (activeTab: ActiveTab, seq: number) => {
+    const resourcesSeq = ++resourcesSeqRef.current;
+    setState((current) => ({
+      ...current,
+      isLoadingResources: true,
+      status: '正在同步资源信息',
+    }));
+
+    try {
+      const resources = await requestSnapshot(activeTab.id, 'resources');
+      if (seq !== requestSeqRef.current || resourcesSeq !== resourcesSeqRef.current) return;
+      setState((current) => ({
+        ...current,
+        snapshot: mergeResourceSnapshot(current.snapshot, resources),
+        error: null,
+        isLoadingResources: false,
+        status: resources.resourcesReady ? '详情与资源已自动同步' : '资源暂不可用，等待页面更新',
+      }));
+    } catch {
+      if (seq !== requestSeqRef.current || resourcesSeq !== resourcesSeqRef.current) return;
+      setState((current) => ({
+        ...current,
+        isLoadingResources: false,
+        status: '资源暂不可用，等待页面更新',
+      }));
+    }
+  }, []);
+
+  const loadState = React.useCallback(async (reason: 'initial' | 'route' | 'tab' | 'page' | 'retry' = 'initial') => {
+    const seq = ++requestSeqRef.current;
     setState((current) => ({
       ...current,
       error: null,
-      isLoading: true,
-      status: '正在读取当前标签页',
+      isBooting: current.isBooting && !current.snapshot,
+      isRefreshing: !current.isBooting,
+      status: reason === 'page' ? '检测到页面更新，正在同步' : '正在读取当前标签页',
     }));
 
     try {
       const activeTab = await getActiveTab();
+      if (seq !== requestSeqRef.current) return;
 
       if (!activeTab) {
         setState({
           activeTab: null,
           snapshot: null,
           error: null,
-          isLoading: false,
+          isBooting: false,
+          isRefreshing: false,
+          isLoadingResources: false,
           status: '未读取到当前标签页',
         });
         return;
@@ -699,37 +775,62 @@ function SidePanel() {
           activeTab,
           snapshot: null,
           error: null,
-          isLoading: false,
+          isBooting: false,
+          isRefreshing: false,
+          isLoadingResources: false,
           status: '当前不是 Mukaku 详情页',
         });
         return;
       }
 
-      const snapshot = await requestSnapshot(activeTab.id);
+      const snapshot = await requestSnapshot(activeTab.id, 'page');
+      if (seq !== requestSeqRef.current) return;
 
       setState({
         activeTab,
         snapshot,
         error: null,
-        isLoading: false,
-        status: snapshot.pageReady ? '详情快照已就绪' : '详情页仍在渲染',
+        isBooting: false,
+        isRefreshing: false,
+        isLoadingResources: true,
+        status: snapshot.pageReady ? '详情已读取，正在同步资源' : '详情页仍在渲染，自动等待更新',
       });
+
+      void loadResources(activeTab, seq);
     } catch (cause) {
+      if (seq !== requestSeqRef.current) return;
       setState((current) => ({
         ...current,
         snapshot: null,
         error: cause instanceof Error ? cause.message : '读取页面快照失败',
-        isLoading: false,
+        isBooting: false,
+        isRefreshing: false,
+        isLoadingResources: false,
         status: '读取失败',
       }));
-    } finally {
-      loadingRef.current = false;
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null;
+        void loadState('retry');
+      }, 1500);
     }
-  }, []);
+  }, [loadResources]);
+
+  const scheduleLoadState = React.useCallback((reason: 'route' | 'tab' | 'page') => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      void loadState(reason);
+    }, 200);
+  }, [loadState]);
 
   React.useEffect(() => {
     void loadState();
   }, [loadState]);
+
+  React.useEffect(() => () => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  }, []);
 
   // Check 115 connection on mount + on visibility change
   const checkCloud115 = React.useCallback(() => {
@@ -742,29 +843,42 @@ function SidePanel() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [checkCloud115]);
 
-  // Listen for SPA route changes from content script
+  // Listen for SPA route changes, page updates, and active-tab changes.
   React.useEffect(() => {
-    const handleRouteChange = (message: MukakuRouteChangedMessage) => {
-      if (message?.type !== MUKAKU_ROUTE_CHANGED_MESSAGE) return;
-      void loadState();
+    const handleRuntimeMessage = (message: MukakuRouteChangedMessage | MukakuPageUpdatedMessage) => {
+      if (message?.type === MUKAKU_ROUTE_CHANGED_MESSAGE) {
+        scheduleLoadState('route');
+        return;
+      }
+      if (message?.type === MUKAKU_PAGE_UPDATED_MESSAGE) {
+        scheduleLoadState('page');
+      }
+    };
+    const handleTabActivated = () => scheduleLoadState('tab');
+    const handleTabUpdated = (_tabId: number, changeInfo: { url?: string; status?: string }) => {
+      if (changeInfo.url || changeInfo.status === 'complete') scheduleLoadState('tab');
     };
 
-    browser.runtime.onMessage.addListener(handleRouteChange);
+    browser.runtime.onMessage.addListener(handleRuntimeMessage);
+    browser.tabs.onActivated.addListener(handleTabActivated);
+    browser.tabs.onUpdated.addListener(handleTabUpdated);
     return () => {
-      browser.runtime.onMessage.removeListener(handleRouteChange);
+      browser.runtime.onMessage.removeListener(handleRuntimeMessage);
+      browser.tabs.onActivated.removeListener(handleTabActivated);
+      browser.tabs.onUpdated.removeListener(handleTabUpdated);
     };
-  }, [loadState]);
+  }, [scheduleLoadState]);
 
-  if (state.isLoading) {
+  if (state.isBooting) {
     return <LoadingView />;
   }
 
   if (state.error) {
-    return <ErrorView message={state.error} onRefresh={() => void loadState()} />;
+    return <ErrorView message={state.error} />;
   }
 
   if (!state.snapshot || !state.activeTab) {
-    return <EmptyRouteView activeTab={state.activeTab} onRefresh={() => void loadState()} />;
+    return <EmptyRouteView activeTab={state.activeTab} />;
   }
 
   return (
@@ -772,9 +886,10 @@ function SidePanel() {
       activeTab={state.activeTab}
       snapshot={state.snapshot}
       status={state.status}
+      isRefreshing={state.isRefreshing}
+      isLoadingResources={state.isLoadingResources}
       cloud115={cloud115}
       onRecheckCloud={checkCloud115}
-      onRefresh={() => void loadState()}
     />
   );
 }

@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { MediaSnapshot, RouteKind, SeedResource } from '../core/types.ts';
+import type { SnapshotMode } from '../core/messaging.ts';
 
 // ===========================================================================
 // Site Adapter — one implementation per supported resource site
@@ -25,7 +26,7 @@ export interface SiteAdapter {
   extractMediaId(url: string): string | null;
 
   /** Build a full MediaSnapshot from the current page DOM / API */
-  buildSnapshot(): Promise<MediaSnapshot>;
+  buildSnapshot(mode?: SnapshotMode): Promise<MediaSnapshot>;
 
   /** Fetch seed/magnet resources for a media item (API → DOM fallback) */
   fetchSeeds(mediaId: string): Promise<SeedResource[]>;

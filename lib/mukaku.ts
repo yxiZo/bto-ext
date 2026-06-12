@@ -12,6 +12,7 @@ import { MIRROR_HOSTNAMES } from '@/lib/adapters/sites/mukaku';
 export const MUKAKU_ORIGIN = `https://${MIRROR_HOSTNAMES[0]}`;
 export const MUKAKU_SNAPSHOT_MESSAGE = 'BT0_GET_SNAPSHOT';
 export const MUKAKU_ROUTE_CHANGED_MESSAGE = 'BT0_ROUTE_CHANGED';
+export const MUKAKU_PAGE_UPDATED_MESSAGE = 'BT0_PAGE_UPDATED';
 
 function isMirrorHost(h: string) { return MIRROR_HOSTNAMES.includes(h); }
 
@@ -29,3 +30,4 @@ export function getMukakuRouteKind(url: string): import('@/lib/core/types').Rout
 export type MukakuMediaSnapshot = import('@/lib/core/types').MediaSnapshot;
 export type MukakuSnapshotRequest = import('@/lib/core/messaging').GetSnapshotRequest;
 export type MukakuRouteChangedMessage = import('@/lib/core/messaging').RouteChangedMessage;
+export type MukakuPageUpdatedMessage = import('@/lib/core/messaging').PageUpdatedMessage;

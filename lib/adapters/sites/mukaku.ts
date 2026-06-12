@@ -5,6 +5,7 @@
 import type { SiteAdapter } from '../types.ts';
 import type { MediaSnapshot, ResourceCategory, RouteKind, SeedResource } from '../../core/types.ts';
 import { emptySnapshot } from '../../core/types.ts';
+import type { SnapshotMode } from '../../core/messaging.ts';
 
 // ===========================================================================
 // Constants
@@ -162,6 +163,11 @@ async function waitForDetailDom(routeKind: RouteKind): Promise<boolean> {
   return el !== null;
 }
 
+function hasDetailDom(routeKind: RouteKind): boolean {
+  if (routeKind !== 'detail') return false;
+  return TITLE_SELECTORS.some((sel) => document.querySelector(sel));
+}
+
 // ===========================================================================
 // Seed extraction
 // ===========================================================================
@@ -172,6 +178,7 @@ const MAX_RETRIES = 1;
 
 type CacheEntry = { seeds: SeedResource[]; ts: number };
 const seedCache = new Map<string, CacheEntry>();
+const seedRequestCache = new Map<string, Promise<SeedResource[]>>();
 
 function getCached(mediaId: string): SeedResource[] | null {
   const entry = seedCache.get(mediaId);
@@ -251,14 +258,25 @@ function extractSeedsFromDom(): SeedResource[] {
 async function fetchSeeds(mediaId: string): Promise<SeedResource[]> {
   const cached = getCached(mediaId);
   if (cached) return cached;
+  const pending = seedRequestCache.get(mediaId);
+  if (pending) return pending;
 
-  let seeds: SeedResource[] = [];
+  const request = (async () => {
+    let seeds: SeedResource[] = [];
+    try {
+      seeds = await fetchSeedsFromApi(mediaId);
+    } catch { /* fall through */ }
+    if (!seeds.length) seeds = extractSeedsFromDom();
+    if (seeds.length) seedCache.set(mediaId, { seeds, ts: Date.now() });
+    return seeds;
+  })();
+
+  seedRequestCache.set(mediaId, request);
   try {
-    seeds = await fetchSeedsFromApi(mediaId);
-  } catch { /* fall through */ }
-  if (!seeds.length) seeds = extractSeedsFromDom();
-  if (seeds.length) seedCache.set(mediaId, { seeds, ts: Date.now() });
-  return seeds;
+    return await request;
+  } finally {
+    seedRequestCache.delete(mediaId);
+  }
 }
 
 // ===========================================================================
@@ -375,11 +393,11 @@ function groupSeedsByQuality(seeds: SeedResource[]): Record<string, SeedResource
 // Snapshot builder
 // ===========================================================================
 
-async function buildSnapshot(): Promise<MediaSnapshot> {
+async function buildSnapshot(mode: SnapshotMode = 'full'): Promise<MediaSnapshot> {
   const url = location.href;
   const routeKind = detectRouteKind(url);
   const mediaId = extractMediaId(url);
-  const pageReady = await waitForDetailDom(routeKind);
+  const pageReady = mode === 'page' ? hasDetailDom(routeKind) : await waitForDetailDom(routeKind);
 
   const snapshot = emptySnapshot(url, routeKind);
 
@@ -408,7 +426,7 @@ async function buildSnapshot(): Promise<MediaSnapshot> {
   const seedTab = firstMatchingText(/^种子资源\s*\(\d+\)/);
   const netdiskTab = firstMatchingText(/^网盘资源\s*\(\d+\)/);
 
-  if (mediaId && routeKind === 'detail') {
+  if (mode !== 'page' && mediaId && routeKind === 'detail') {
     try {
       const seeds = await fetchSeeds(mediaId);
       const recommended = recommendSeeds(seeds);
@@ -421,6 +439,7 @@ async function buildSnapshot(): Promise<MediaSnapshot> {
         recommended.filter((s) => s.recommendation.isRecommended && s.recommendation.reason)
           .map((s) => [s.uri, s.recommendation.reason]),
       );
+      snapshot.resourcesReady = true;
     } catch { /* seeds are optional */ }
   }
 
