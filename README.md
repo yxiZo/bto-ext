@@ -31,4 +31,16 @@ npm run dev          # 开发模式，热更新
 
 ```bash
 npm run build        # 生产构建 → .output/chrome-mv3
+npm run zip          # 打包 zip → .output/*.zip
 ```
+
+## 发布
+
+推送 `v*` tag 会触发 GitHub Actions：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+流程会执行 `npm ci`、`npm run compile`、`npm test`、`npm run build`、`npm run zip`，并把 `.output/*.zip` 上传到 GitHub Release。
