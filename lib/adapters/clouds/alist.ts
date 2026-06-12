@@ -92,12 +92,13 @@ async function checkConnection(): Promise<CloudConnectionStatus> {
       headers: { 'Authorization': config.token, 'Accept': 'application/json' },
       signal: AbortSignal.timeout(5000),
     });
-    if (!resp.ok) return { connected: false };
-    const data = await resp.json() as { code?: number; data?: { username?: string } };
-    return {
-      connected: data.code === 200,
-      username: data.data?.username,
-    };
+    const data = await resp.json() as { code?: number; data?: { username?: string; id?: number } };
+    if (resp.ok && (data.code === 200 || data.data?.id)) {
+      return { connected: true, username: data.data?.username };
+    }
+    // Fallback: just having a non-401 response means connected
+    if (resp.ok && data.code !== 401) return { connected: true };
+    return { connected: false };
   } catch { return { connected: false }; }
 }
 
@@ -113,6 +114,8 @@ async function submitOfflineTask(uri: string, _fileName?: string): Promise<Cloud
     const body = JSON.stringify({
       path: config.path || '/',
       urls: [uri],
+      tool: '115 Cloud',
+      delete_policy: 'delete_on_upload_succeed',
     });
 
     const resp = await fetch(`${config.url}/api/fs/add_offline_download`, {

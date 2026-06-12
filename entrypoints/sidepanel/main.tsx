@@ -35,8 +35,8 @@ import {
   type MukakuRouteChangedMessage,
   type MukakuSnapshotRequest,
 } from '@/lib/mukaku';
-import { adapterAlist } from '@/lib/adapters/clouds/alist';
-import type { CloudConnectionStatus } from '@/lib/adapters/types';
+import { adapter115 } from '@/lib/adapters/clouds/115';
+import type { CloudAdapter, CloudConnectionStatus } from '@/lib/adapters/types';
 
 type ActiveTab = {
   id: number;
@@ -160,7 +160,7 @@ function CopyButton({ text, label = '复制' }: { text: string; label?: string }
   );
 }
 
-function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter: typeof adapterAlist }) {
+function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter: CloudAdapter }) {
   const [status, setStatus] = React.useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = React.useState('');
 
@@ -201,7 +201,7 @@ function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter
       ) : (
         <Server className="h-3 w-3" />
       )}
-      {status === 'pushing' ? '推送中' : status === 'error' ? errorMsg.slice(0, 8) : 'AList'}
+      {status === 'pushing' ? '推送中' : status === 'error' ? errorMsg.slice(0, 8) : adapter.id}
     </Button>
   );
 }
@@ -294,14 +294,14 @@ function DetailView({
   snapshot,
   activeTab,
   status,
-  cloudAlist,
+  cloud115,
   onRefresh,
   onRecheckCloud,
 }: {
   snapshot: MukakuMediaSnapshot;
   activeTab: ActiveTab;
   status: string;
-  cloudAlist: CloudConnectionStatus;
+  cloud115: CloudConnectionStatus;
   onRefresh: () => void;
   onRecheckCloud: () => void;
 }) {
@@ -320,13 +320,13 @@ function DetailView({
               <p className="mt-1 truncate text-xs text-muted-foreground">{status}</p>
             </div>
             <div className="flex items-center gap-2">
-              {cloudAlist.connected ? (
+              {cloud115.connected ? (
                 <Badge variant="outline" className="gap-1 text-xs">
-                  <Server className="h-3 w-3" />AList
+                  <Server className="h-3 w-3" />115
                 </Badge>
               ) : (
                 <Badge variant="outline" className="gap-1 text-xs text-muted-foreground">
-                  <Server className="h-3 w-3" />AList 未连接
+                  <Server className="h-3 w-3" />115 未连接
                 </Badge>
               )}
               <Button aria-label="刷新详情" size="icon" variant="outline" onClick={onRefresh}>
@@ -473,13 +473,13 @@ function DetailView({
                   </Card>
                 </div>
 
-                {/* AList config prompt */}
-                {!cloudAlist.connected && snapshot.resources.allSeeds.length > 0 ? (
+                {/* 115 login prompt */}
+                {!cloud115.connected && snapshot.resources.allSeeds.length > 0 ? (
                   <Alert className="border-blue-500/30 bg-blue-50 dark:bg-blue-950/20">
                     <Server className="h-4 w-4 text-blue-600" />
-                    <AlertTitle>配置 AList 即可一键离线</AlertTitle>
+                    <AlertTitle>登录 115 即可一键离线</AlertTitle>
                     <AlertDescription className="flex flex-col gap-2">
-                      <span>通过 AList 网关连接网盘离线下载。</span>
+                      <span>使用当前浏览器的 115 登录态提交离线下载任务。</span>
                       <div className="flex gap-2">
                         <Button
                           className="h-7 gap-1 text-xs"
@@ -544,8 +544,8 @@ function DetailView({
                                     <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
                                     <div className="flex shrink-0 gap-1">
                                       <CopyButton label="复制磁力" text={seed.uri} />
-                                      {cloudAlist.connected ? (
-                                        <PushButton uri={seed.uri} name={seed.name} adapter={adapterAlist} />
+                                      {cloud115.connected ? (
+                                        <PushButton uri={seed.uri} name={seed.name} adapter={adapter115} />
                                       ) : null}
                                     </div>
                                   </div>
@@ -582,8 +582,8 @@ function DetailView({
                               <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
                               <div className="flex shrink-0 gap-1">
                                 <CopyButton label="复制磁力" text={seed.uri} />
-                                {cloudAlist.connected ? (
-                                  <PushButton uri={seed.uri} name={seed.name} adapter={adapterAlist} />
+                                {cloud115.connected ? (
+                                  <PushButton uri={seed.uri} name={seed.name} adapter={adapter115} />
                                 ) : null}
                               </div>
                             </div>
@@ -663,7 +663,7 @@ function DetailView({
 
 function SidePanel() {
   const [state, setState] = React.useState<PanelState>(initialState);
-  const [cloudAlist, setCloudAlist] = React.useState<CloudConnectionStatus>({ connected: false });
+  const [cloud115, setCloud115] = React.useState<CloudConnectionStatus>({ connected: false });
 
   // Ref to track if a load is in-flight to avoid concurrent requests
   const loadingRef = React.useRef(false);
@@ -731,16 +731,16 @@ function SidePanel() {
     void loadState();
   }, [loadState]);
 
-  // Check AList connection on mount + on visibility change
-  const checkCloudAlist = React.useCallback(() => {
-    adapterAlist.checkConnection().then(setCloudAlist).catch(() => setCloudAlist({ connected: false }));
+  // Check 115 connection on mount + on visibility change
+  const checkCloud115 = React.useCallback(() => {
+    adapter115.checkConnection().then(setCloud115).catch(() => setCloud115({ connected: false }));
   }, []);
   React.useEffect(() => {
-    checkCloudAlist();
-    const onVisible = () => { if (document.visibilityState === 'visible') checkCloudAlist(); };
+    checkCloud115();
+    const onVisible = () => { if (document.visibilityState === 'visible') checkCloud115(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [checkCloudAlist]);
+  }, [checkCloud115]);
 
   // Listen for SPA route changes from content script
   React.useEffect(() => {
@@ -772,8 +772,8 @@ function SidePanel() {
       activeTab={state.activeTab}
       snapshot={state.snapshot}
       status={state.status}
-      cloudAlist={cloudAlist}
-      onRecheckCloud={checkCloudAlist}
+      cloud115={cloud115}
+      onRecheckCloud={checkCloud115}
       onRefresh={() => void loadState()}
     />
   );
