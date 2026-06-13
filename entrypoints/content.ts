@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser';
 import { defineContentScript } from 'wxt/utils/define-content-script';
+import type { ContentScriptContext } from 'wxt/utils/content-script-context';
 
 import { mukakuAdapter } from '@/lib/adapters/sites/mukaku';
 import { validateSnapshot } from '@/lib/core/validate';
@@ -20,19 +21,11 @@ import {
 const activeAdapter = mukakuAdapter;
 
 // ---------------------------------------------------------------------------
-// SPA route change detection
+// Page update notifications (debounced, deduped by page signature)
 // ---------------------------------------------------------------------------
 
-let lastKnownUrl = location.href;
 let updateTimer: ReturnType<typeof setTimeout> | null = null;
 let lastUpdateSignature = '';
-
-function pageUpdateSignature() {
-  const title = document.querySelector('.media-details-area .info h1, .media-details-area h1, h1')?.textContent?.trim() ?? '';
-  const visibleResources = document.querySelectorAll('.resource-item-card-modern').length;
-  const categoryText = document.querySelector('.resource-nav-wrapper')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-  return `${location.href}|${title}|${visibleResources}|${categoryText}`;
-}
 
 function notifyRouteChanged(url: string) {
   const routeKind = activeAdapter.detectRouteKind(url);
@@ -67,54 +60,51 @@ function schedulePageUpdated(reason: PageUpdatedMessage['reason']) {
   if (updateTimer) clearTimeout(updateTimer);
   updateTimer = setTimeout(() => {
     updateTimer = null;
-    const signature = pageUpdateSignature();
+    const signature = activeAdapter.pageSignature();
     if (signature === lastUpdateSignature) return;
     lastUpdateSignature = signature;
     notifyPageUpdated(reason);
   }, 250);
 }
 
-function installSpaListeners() {
-  const originalPushState = history.pushState.bind(history);
-  history.pushState = function (...args) {
-    originalPushState(...args);
-    const newUrl = location.href;
-    if (newUrl !== lastKnownUrl) {
-      lastKnownUrl = newUrl;
-      notifyRouteChanged(newUrl);
-      schedulePageUpdated('dom');
+// ---------------------------------------------------------------------------
+// DOM observation — only while on a detail route
+// ---------------------------------------------------------------------------
+
+function installPageUpdateListeners(ctx: ContentScriptContext) {
+  const observer = new MutationObserver(() => schedulePageUpdated('dom'));
+  let observing = false;
+
+  const syncObserver = () => {
+    const isDetail = activeAdapter.detectRouteKind(location.href) === 'detail';
+    if (isDetail && !observing) {
+      observer.observe(document.body, { childList: true, subtree: true });
+      observing = true;
+    } else if (!isDetail && observing) {
+      observer.disconnect();
+      observing = false;
     }
   };
 
-  const originalReplaceState = history.replaceState.bind(history);
-  history.replaceState = function (...args) {
-    originalReplaceState(...args);
-    const newUrl = location.href;
-    if (newUrl !== lastKnownUrl) {
-      lastKnownUrl = newUrl;
-      notifyRouteChanged(newUrl);
-      schedulePageUpdated('dom');
-    }
-  };
-
-  window.addEventListener('popstate', () => {
-    const newUrl = location.href;
-    if (newUrl !== lastKnownUrl) {
-      lastKnownUrl = newUrl;
-      notifyRouteChanged(newUrl);
-      schedulePageUpdated('dom');
-    }
-  });
-}
-
-function installPageUpdateListeners() {
-  window.addEventListener('load', () => schedulePageUpdated('load'));
-  document.addEventListener('visibilitychange', () => {
+  ctx.addEventListener(window, 'load', () => schedulePageUpdated('load'));
+  ctx.addEventListener(document, 'visibilitychange', () => {
     if (document.visibilityState === 'visible') schedulePageUpdated('visibility');
   });
 
-  const observer = new MutationObserver(() => schedulePageUpdated('dom'));
-  observer.observe(document.body, { childList: true, subtree: true });
+  // SPA navigation — WXT watches location changes from the isolated world
+  // (monkey-patching history here would never see the page's own pushState calls).
+  ctx.addEventListener(window, 'wxt:locationchange', ({ newUrl }) => {
+    syncObserver();
+    notifyRouteChanged(newUrl.toString());
+    schedulePageUpdated('dom');
+  });
+
+  ctx.onInvalidated(() => {
+    observer.disconnect();
+    if (updateTimer) clearTimeout(updateTimer);
+  });
+
+  syncObserver();
 }
 
 // ---------------------------------------------------------------------------
@@ -123,23 +113,27 @@ function installPageUpdateListeners() {
 
 export default defineContentScript({
   matches: activeAdapter.matchPatterns,
-  main() {
-    installSpaListeners();
-    installPageUpdateListeners();
+  main(ctx) {
+    installPageUpdateListeners(ctx);
     schedulePageUpdated('dom');
 
-    browser.runtime.onMessage.addListener(async (message: GetSnapshotRequest) => {
+    browser.runtime.onMessage.addListener((message: GetSnapshotRequest, _sender, sendResponse) => {
       if (message?.type !== MSG_GET_SNAPSHOT) return;
 
-      const snapshot = await activeAdapter.buildSnapshot(message.mode);
+      void activeAdapter.buildSnapshot(message.mode)
+        .then((snapshot) => {
+          // Non-blocking validation — logs to console if debug mode
+          const validation = validateSnapshot(snapshot);
+          if (!validation.valid || validation.warnings.length) {
+            console.debug(`[BT0:${activeAdapter.id}] snapshot validation:`, validation);
+          }
+          sendResponse(snapshot);
+        })
+        .catch(() => sendResponse(null));
 
-      // Non-blocking validation — logs to console if debug mode
-      const validation = validateSnapshot(snapshot);
-      if (!validation.valid || validation.warnings.length) {
-        console.debug(`[BT0:${activeAdapter.id}] snapshot validation:`, validation);
-      }
-
-      return snapshot;
+      // Keep the message channel open for the async response
+      // (Chrome does not honor a Promise returned from the listener).
+      return true;
     });
   },
 });

@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { SiteAdapter } from '../types.ts';
-import type { MediaSnapshot, ResourceCategory, RouteKind, SeedResource } from '../../core/types.ts';
+import type { MediaSnapshot, ResourceCategory, RouteKind, SeedRecommendation, SeedResource } from '../../core/types.ts';
 import { emptySnapshot } from '../../core/types.ts';
 import type { SnapshotMode } from '../../core/messaging.ts';
 
@@ -53,6 +53,7 @@ function detectRouteKind(url: string): RouteKind {
 function extractMediaId(url: string): string | null {
   try {
     const parsed = new URL(url);
+    if (!isMirrorHost(parsed.hostname)) return null;
     return parsed.pathname.match(/^\/mv\/([^/?#]+)/)?.[1] ?? null;
   } catch {
     return null;
@@ -195,7 +196,7 @@ async function fetchWithTimeout(url: string, ms: number) {
   try {
     return await fetch(url, {
       signal: ctrl.signal,
-      headers: { Accept: 'application/json, text/plain, */*', 'Content-Type': 'application/json;charset=UTF-8' },
+      headers: { Accept: 'application/json, text/plain, */*' },
     });
   } finally {
     clearTimeout(timer);
@@ -283,16 +284,6 @@ async function fetchSeeds(mediaId: string): Promise<SeedResource[]> {
 // Smart recommendation — scores seeds within each quality group
 // ===========================================================================
 
-/** Per-seed recommendation metadata */
-export type SeedRecommendation = {
-  /** Whether this seed is the recommended pick in its quality group */
-  isRecommended: boolean;
-  /** Human-readable reason for the recommendation */
-  reason: string;
-  /** Numeric score (higher = better) */
-  score: number;
-};
-
 /** Extended seed resource with recommendation attached */
 export type RecommendedSeed = SeedResource & { recommendation: SeedRecommendation };
 
@@ -356,30 +347,28 @@ function parseSizeGB(sizeStr: string): number {
 }
 
 function recommendSeeds(seeds: SeedResource[]): RecommendedSeed[] {
-  // Group by quality for relative scoring
+  // Group by quality, score each seed against its own group, mark the best per group
   const byQuality = groupSeedsByQuality(seeds);
 
-  const recommendedUris = new Set<string>();
-  // Pick the best in each quality group
-  for (const [, group] of Object.entries(byQuality)) {
+  const recommendations = new Map<SeedResource, SeedRecommendation>();
+  for (const group of Object.values(byQuality)) {
     if (group.length === 0) continue;
-    const scored = group.map((s) => ({ seed: s, ...scoreSeed(s, group) }));
-    scored.sort((a, b) => b.score - a.score);
-    if (scored[0]) recommendedUris.add(scored[0].seed.uri);
-  }
-
-  return seeds.map((seed) => {
-    const { score, reasons } = scoreSeed(seed, seeds);
-    const isRecommended = recommendedUris.has(seed.uri);
-    return {
-      ...seed,
-      recommendation: {
+    const scored = group.map((seed) => ({ seed, ...scoreSeed(seed, group) }));
+    const best = scored.reduce((a, b) => (b.score > a.score ? b : a));
+    for (const { seed, score, reasons } of scored) {
+      const isRecommended = seed === best.seed;
+      recommendations.set(seed, {
         isRecommended,
         reason: isRecommended ? reasons.slice(0, 3).join(' · ') : '',
         score,
-      },
-    };
-  });
+      });
+    }
+  }
+
+  return seeds.map((seed) => ({
+    ...seed,
+    recommendation: recommendations.get(seed) ?? { isRecommended: false, reason: '', score: 0 },
+  }));
 }
 
 function groupSeedsByQuality(seeds: SeedResource[]): Record<string, SeedResource[]> {
@@ -429,16 +418,7 @@ async function buildSnapshot(mode: SnapshotMode = 'full'): Promise<MediaSnapshot
   if (mode !== 'page' && mediaId && routeKind === 'detail') {
     try {
       const seeds = await fetchSeeds(mediaId);
-      const recommended = recommendSeeds(seeds);
-      snapshot.resources.allSeeds = recommended;
-      snapshot.resources.seedsByQuality = groupSeedsByQuality(recommended);
-      snapshot.resources.recommendedSeeds = recommended
-        .filter((s) => s.recommendation.isRecommended)
-        .map((s) => s.uri);
-      snapshot.resources.recommendationReasons = Object.fromEntries(
-        recommended.filter((s) => s.recommendation.isRecommended && s.recommendation.reason)
-          .map((s) => [s.uri, s.recommendation.reason]),
-      );
+      snapshot.resources.allSeeds = recommendSeeds(seeds);
       snapshot.resourcesReady = true;
     } catch { /* seeds are optional */ }
   }
@@ -451,6 +431,17 @@ async function buildSnapshot(mode: SnapshotMode = 'full'): Promise<MediaSnapshot
   snapshot.capturedAt = new Date().toISOString();
 
   return snapshot;
+}
+
+// ===========================================================================
+// Page signature — content script 用它判断页面是否实质变化
+// ===========================================================================
+
+function pageSignature(): string {
+  const title = text(...TITLE_SELECTORS) ?? '';
+  const visibleResources = document.querySelectorAll('.resource-item-card-modern').length;
+  const categoryText = cleanText(document.querySelector('.resource-nav-wrapper')?.textContent) ?? '';
+  return `${location.href}|${title}|${visibleResources}|${categoryText}`;
 }
 
 // ===========================================================================
@@ -468,4 +459,5 @@ export const mukakuAdapter: SiteAdapter = {
   buildSnapshot,
   fetchSeeds,
   groupSeedsByQuality,
+  pageSignature,
 };

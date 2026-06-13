@@ -28,17 +28,21 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  getMukakuRouteKind,
-  MUKAKU_PAGE_UPDATED_MESSAGE,
-  MUKAKU_ROUTE_CHANGED_MESSAGE,
-  MUKAKU_SNAPSHOT_MESSAGE,
-  type MukakuMediaSnapshot,
-  type MukakuPageUpdatedMessage,
-  type MukakuRouteChangedMessage,
-  type MukakuSnapshotRequest,
-} from '@/lib/mukaku';
+  MSG_GET_SNAPSHOT,
+  MSG_PAGE_UPDATED,
+  MSG_ROUTE_CHANGED,
+  type GetSnapshotRequest,
+  type IncomingMessage,
+} from '@/lib/core/messaging';
+import type { MediaSnapshot, SeedResource } from '@/lib/core/types';
+import { mukakuAdapter } from '@/lib/adapters/sites/mukaku';
 import { adapter115 } from '@/lib/adapters/clouds/115';
+import { adapterAlist } from '@/lib/adapters/clouds/alist';
 import type { CloudAdapter, CloudConnectionStatus } from '@/lib/adapters/types';
+
+const CLOUD_ADAPTERS: CloudAdapter[] = [adapter115, adapterAlist];
+
+type CloudStatusMap = Record<string, CloudConnectionStatus>;
 
 type ActiveTab = {
   id: number;
@@ -48,7 +52,7 @@ type ActiveTab = {
 
 type PanelState = {
   activeTab: ActiveTab | null;
-  snapshot: MukakuMediaSnapshot | null;
+  snapshot: MediaSnapshot | null;
   error: string | null;
   status: string;
   isBooting: boolean;
@@ -81,15 +85,18 @@ async function getActiveTab(): Promise<ActiveTab | null> {
   };
 }
 
-async function requestSnapshot(tabId: number, mode: MukakuSnapshotRequest['mode']) {
-  return browser.tabs.sendMessage(tabId, {
-    type: MUKAKU_SNAPSHOT_MESSAGE,
+async function requestSnapshot(tabId: number, mode: GetSnapshotRequest['mode']): Promise<MediaSnapshot> {
+  const snapshot = (await browser.tabs.sendMessage(tabId, {
+    type: MSG_GET_SNAPSHOT,
     mode,
-  } satisfies MukakuSnapshotRequest) as Promise<MukakuMediaSnapshot>;
+  } satisfies GetSnapshotRequest)) as MediaSnapshot | null | undefined;
+
+  if (!snapshot) throw new Error('页面快照读取失败');
+  return snapshot;
 }
 
-function routeLabel(snapshot: MukakuMediaSnapshot | null, activeTab: ActiveTab | null) {
-  const routeKind = snapshot?.routeKind ?? (activeTab ? getMukakuRouteKind(activeTab.url) : 'other');
+function routeLabel(snapshot: MediaSnapshot | null, activeTab: ActiveTab | null) {
+  const routeKind = snapshot?.routeKind ?? (activeTab ? mukakuAdapter.detectRouteKind(activeTab.url) : 'other');
 
   switch (routeKind) {
     case 'detail':
@@ -121,9 +128,9 @@ function formatTime(value: string) {
 }
 
 function mergeResourceSnapshot(
-  current: MukakuMediaSnapshot | null,
-  resources: MukakuMediaSnapshot,
-): MukakuMediaSnapshot {
+  current: MediaSnapshot | null,
+  resources: MediaSnapshot,
+): MediaSnapshot {
   if (!current || current.mediaId !== resources.mediaId || current.url !== resources.url) {
     return resources;
   }
@@ -185,7 +192,7 @@ function CopyButton({ text, label = '复制' }: { text: string; label?: string }
 }
 
 function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter: CloudAdapter }) {
-  const [status, setStatus] = React.useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
+  const [status, setStatus] = React.useState<'idle' | 'pushing' | 'done' | 'duplicate' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = React.useState('');
 
   const handlePush = React.useCallback(async () => {
@@ -194,6 +201,9 @@ function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter
     const result = await adapter.submitOfflineTask(uri, name);
     if (result.success) {
       setStatus('done');
+      setTimeout(() => setStatus('idle'), 3000);
+    } else if (result.duplicate) {
+      setStatus('duplicate');
       setTimeout(() => setStatus('idle'), 3000);
     } else {
       setStatus('error');
@@ -209,9 +219,18 @@ function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter
     );
   }
 
+  if (status === 'duplicate') {
+    return (
+      <Button aria-label="近期已推送过" className="h-7 gap-1 text-xs" size="sm" variant="secondary" disabled>
+        <Check className="h-3 w-3" />已推送过
+      </Button>
+    );
+  }
+
   return (
     <Button
-      aria-label={status === 'error' ? errorMsg : '推送'}
+      aria-label={status === 'error' ? errorMsg : `推送到 ${adapter.name}`}
+      title={status === 'error' ? errorMsg : `推送到 ${adapter.name}`}
       className="h-7 gap-1 text-xs"
       size="sm"
       variant={status === 'error' ? 'destructive' : 'outline'}
@@ -225,8 +244,43 @@ function PushButton({ uri, name, adapter }: { uri: string; name: string; adapter
       ) : (
         <Server className="h-3 w-3" />
       )}
-      {status === 'pushing' ? '推送中' : status === 'error' ? errorMsg.slice(0, 8) : adapter.id}
+      {status === 'pushing' ? '推送中' : status === 'error' ? '失败，重试' : adapter.id}
     </Button>
+  );
+}
+
+function SeedCard({ seed, clouds }: { seed: SeedResource; clouds: CloudAdapter[] }) {
+  const recommendation = seed.recommendation;
+  const isRecommended = recommendation?.isRecommended ?? false;
+
+  return (
+    <div
+      className={`flex flex-col gap-1 rounded-md border p-2 text-xs ${isRecommended ? 'border-green-500/50 bg-green-50 dark:bg-green-950/20' : ''}`}
+    >
+      {isRecommended ? (
+        <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
+          <Star className="h-3 w-3 fill-current" />
+          <span className="font-medium">推荐</span>
+          {recommendation?.reason ? <span className="text-muted-foreground">· {recommendation.reason}</span> : null}
+        </div>
+      ) : null}
+      <div className="flex items-start justify-between gap-2">
+        <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
+        <div className="flex shrink-0 gap-1">
+          <CopyButton label="复制磁力" text={seed.uri} />
+          {clouds.map((adapter) => (
+            <PushButton key={adapter.id} uri={seed.uri} name={seed.name} adapter={adapter} />
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 text-muted-foreground">
+        <span>{seed.size}</span>
+        {seed.addedAt ? <><span>·</span><span>{seed.addedAt}</span></> : null}
+        {seed.isNew ? (
+          <Badge className="h-4 px-1 text-[10px]" variant="default">新</Badge>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -322,21 +376,26 @@ function DetailView({
   status,
   isRefreshing,
   isLoadingResources,
-  cloud115,
+  connectedClouds,
   onRecheckCloud,
 }: {
-  snapshot: MukakuMediaSnapshot;
+  snapshot: MediaSnapshot;
   activeTab: ActiveTab;
   status: string;
   isRefreshing: boolean;
   isLoadingResources: boolean;
-  cloud115: CloudConnectionStatus;
+  connectedClouds: CloudAdapter[];
   onRecheckCloud: () => void;
 }) {
   const seedTotal = snapshot.resources.seedTotal ?? 0;
   const netdiskTotal = snapshot.resources.netdiskTotal ?? 0;
   const totalResources = seedTotal + netdiskTotal;
   const heroTags = [snapshot.year, snapshot.region, snapshot.genre].filter((item): item is string => Boolean(item));
+  const allSeeds = snapshot.resources.allSeeds;
+  const seedsByQuality = React.useMemo(
+    () => mukakuAdapter.groupSeedsByQuality(allSeeds),
+    [allSeeds],
+  );
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -348,13 +407,16 @@ function DetailView({
               <p className="mt-1 truncate text-xs text-muted-foreground">{status}</p>
             </div>
             <div className="flex items-center gap-2">
-              {cloud115.connected ? (
-                <Badge variant="outline" className="gap-1 text-xs">
-                  <Server className="h-3 w-3" />115
-                </Badge>
+              {connectedClouds.length ? (
+                connectedClouds.map((adapter) => (
+                  <Badge key={adapter.id} variant="outline" className="gap-1 text-xs">
+                    <Server className="h-3 w-3" />
+                    {adapter.name}
+                  </Badge>
+                ))
               ) : (
                 <Badge variant="outline" className="gap-1 text-xs text-muted-foreground">
-                  <Server className="h-3 w-3" />115 未连接
+                  <Server className="h-3 w-3" />网盘未连接
                 </Badge>
               )}
               {isRefreshing || isLoadingResources ? (
@@ -509,13 +571,13 @@ function DetailView({
                   </Card>
                 </div>
 
-                {/* 115 login prompt */}
-                {!cloud115.connected && snapshot.resources.allSeeds.length > 0 ? (
+                {/* Cloud login prompt */}
+                {!connectedClouds.length && allSeeds.length > 0 ? (
                   <Alert className="border-blue-500/30 bg-blue-50 dark:bg-blue-950/20">
                     <Server className="h-4 w-4 text-blue-600" />
-                    <AlertTitle>登录 115 即可一键离线</AlertTitle>
+                    <AlertTitle>连接网盘即可一键离线</AlertTitle>
                     <AlertDescription className="flex flex-col gap-2">
-                      <span>使用当前浏览器的 115 登录态提交离线下载任务。</span>
+                      <span>登录 115 或配置 AList 后，可直接把磁力链接推送到离线下载。</span>
                       <div className="flex gap-2">
                         <Button
                           className="h-7 gap-1 text-xs"
@@ -541,7 +603,7 @@ function DetailView({
                 ) : null}
 
                 {/* Magnet links — grouped by quality */}
-                {isLoadingResources && snapshot.resources.allSeeds.length === 0 ? (
+                {isLoadingResources && allSeeds.length === 0 ? (
                   <Card>
                     <CardContent className="flex flex-col gap-2 p-4">
                       <Skeleton className="h-5 w-32" />
@@ -549,98 +611,31 @@ function DetailView({
                       <Skeleton className="h-16 w-full" />
                     </CardContent>
                   </Card>
-                ) : snapshot.resources.allSeeds.length > 0 ? (
+                ) : allSeeds.length > 0 ? (
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center gap-2">
                       <Magnet className="h-4 w-4 text-muted-foreground" />
                       <h3 className="text-sm font-semibold">磁力链接</h3>
                       <Badge variant="secondary" className="text-xs">
-                        {snapshot.resources.allSeeds.length}
+                        {allSeeds.length}
                       </Badge>
                     </div>
 
-                    {Object.entries(snapshot.resources.seedsByQuality).length > 0
-                      ? Object.entries(snapshot.resources.seedsByQuality).map(([quality, seeds]) => (
-                          <Card key={quality}>
-                            <CardHeader className="p-3 pb-2">
-                              <CardTitle className="flex items-center gap-2 text-sm">
-                                <Badge variant="outline">{quality}</Badge>
-                                <span className="text-xs text-muted-foreground">{seeds.length} 个资源</span>
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent className="flex flex-col gap-2 p-3 pt-0">
-                              {seeds.map((seed, idx) => {
-                                const isRec = snapshot.resources.recommendedSeeds.includes(seed.uri);
-                                const recReason = snapshot.resources.recommendationReasons[seed.uri];
-                                return (
-                                <div
-                                  key={`${seed.uri.slice(-20)}-${idx}`}
-                                  className={`flex flex-col gap-1 rounded-md border p-2 text-xs ${isRec ? 'border-green-500/50 bg-green-50 dark:bg-green-950/20' : ''}`}
-                                >
-                                  {isRec ? (
-                                    <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
-                                      <Star className="h-3 w-3 fill-current" />
-                                      <span className="font-medium">推荐</span>
-                                      {recReason ? <span className="text-muted-foreground">· {recReason}</span> : null}
-                                    </div>
-                                  ) : null}
-                                  <div className="flex items-start justify-between gap-2">
-                                    <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
-                                    <div className="flex shrink-0 gap-1">
-                                      <CopyButton label="复制磁力" text={seed.uri} />
-                                      {cloud115.connected ? (
-                                        <PushButton uri={seed.uri} name={seed.name} adapter={adapter115} />
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-2 text-muted-foreground">
-                                    <span>{seed.size}</span>
-                                    {seed.addedAt ? <><span>·</span><span>{seed.addedAt}</span></> : null}
-                                    {seed.isNew ? (
-                                      <Badge className="h-4 px-1 text-[10px]" variant="default">新</Badge>
-                                    ) : null}
-                                  </div>
-                                </div>
-                                );
-                              })}
-                            </CardContent>
-                          </Card>
-                        ))
-                      : /* Flat list when no quality grouping */
-                        snapshot.resources.allSeeds.map((seed, idx) => {
-                          const isRec = snapshot.resources.recommendedSeeds.includes(seed.uri);
-                          const recReason = snapshot.resources.recommendationReasons[seed.uri];
-                          return (
-                          <div
-                            key={`${seed.uri.slice(-20)}-${idx}`}
-                            className={`flex flex-col gap-1 rounded-md border p-2 text-xs ${isRec ? 'border-green-500/50 bg-green-50 dark:bg-green-950/20' : ''}`}
-                          >
-                            {isRec ? (
-                              <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
-                                <Star className="h-3 w-3 fill-current" />
-                                <span className="font-medium">推荐</span>
-                                {recReason ? <span className="text-muted-foreground">· {recReason}</span> : null}
-                              </div>
-                            ) : null}
-                            <div className="flex items-start justify-between gap-2">
-                              <span className="line-clamp-2 font-medium leading-5">{seed.name}</span>
-                              <div className="flex shrink-0 gap-1">
-                                <CopyButton label="复制磁力" text={seed.uri} />
-                                {cloud115.connected ? (
-                                  <PushButton uri={seed.uri} name={seed.name} adapter={adapter115} />
-                                ) : null}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                              <span>{seed.size}</span>
-                              {seed.addedAt ? <span>· {seed.addedAt}</span> : null}
-                              {seed.isNew ? (
-                                <Badge className="h-4 px-1 text-[10px]" variant="default">新</Badge>
-                              ) : null}
-                            </div>
-                          </div>
-                          );
-                        })}
+                    {Object.entries(seedsByQuality).map(([quality, seeds]) => (
+                      <Card key={quality}>
+                        <CardHeader className="p-3 pb-2">
+                          <CardTitle className="flex items-center gap-2 text-sm">
+                            <Badge variant="outline">{quality}</Badge>
+                            <span className="text-xs text-muted-foreground">{seeds.length} 个资源</span>
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="flex flex-col gap-2 p-3 pt-0">
+                          {seeds.map((seed, idx) => (
+                            <SeedCard key={`${seed.uri.slice(-20)}-${idx}`} seed={seed} clouds={connectedClouds} />
+                          ))}
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
                 ) : (
                   <Alert>
@@ -707,7 +702,7 @@ function DetailView({
 
 function SidePanel() {
   const [state, setState] = React.useState<PanelState>(initialState);
-  const [cloud115, setCloud115] = React.useState<CloudConnectionStatus>({ connected: false });
+  const [cloudStatus, setCloudStatus] = React.useState<CloudStatusMap>({});
 
   const requestSeqRef = React.useRef(0);
   const resourcesSeqRef = React.useRef(0);
@@ -768,7 +763,7 @@ function SidePanel() {
         return;
       }
 
-      const routeKind = getMukakuRouteKind(activeTab.url);
+      const routeKind = mukakuAdapter.detectRouteKind(activeTab.url);
 
       if (routeKind !== 'detail') {
         setState({
@@ -832,30 +827,44 @@ function SidePanel() {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
   }, []);
 
-  // Check 115 connection on mount + on visibility change
-  const checkCloud115 = React.useCallback(() => {
-    adapter115.checkConnection().then(setCloud115).catch(() => setCloud115({ connected: false }));
+  // Check cloud connections on mount + on visibility change
+  const checkClouds = React.useCallback(() => {
+    for (const adapter of CLOUD_ADAPTERS) {
+      adapter.checkConnection()
+        .then((status) => setCloudStatus((current) => ({ ...current, [adapter.id]: status })))
+        .catch(() => setCloudStatus((current) => ({ ...current, [adapter.id]: { connected: false } })));
+    }
   }, []);
   React.useEffect(() => {
-    checkCloud115();
-    const onVisible = () => { if (document.visibilityState === 'visible') checkCloud115(); };
+    checkClouds();
+    const onVisible = () => { if (document.visibilityState === 'visible') checkClouds(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [checkCloud115]);
+  }, [checkClouds]);
+
+  const connectedClouds = React.useMemo(
+    () => CLOUD_ADAPTERS.filter((adapter) => cloudStatus[adapter.id]?.connected),
+    [cloudStatus],
+  );
 
   // Listen for SPA route changes, page updates, and active-tab changes.
   React.useEffect(() => {
-    const handleRuntimeMessage = (message: MukakuRouteChangedMessage | MukakuPageUpdatedMessage) => {
-      if (message?.type === MUKAKU_ROUTE_CHANGED_MESSAGE) {
+    const handleRuntimeMessage = (message: IncomingMessage) => {
+      if (message?.type === MSG_ROUTE_CHANGED) {
         scheduleLoadState('route');
         return;
       }
-      if (message?.type === MUKAKU_PAGE_UPDATED_MESSAGE) {
+      if (message?.type === MSG_PAGE_UPDATED) {
         scheduleLoadState('page');
       }
     };
     const handleTabActivated = () => scheduleLoadState('tab');
-    const handleTabUpdated = (_tabId: number, changeInfo: { url?: string; status?: string }) => {
+    const handleTabUpdated = (
+      _tabId: number,
+      changeInfo: { url?: string; status?: string },
+      tab: { active: boolean },
+    ) => {
+      if (!tab.active) return;
       if (changeInfo.url || changeInfo.status === 'complete') scheduleLoadState('tab');
     };
 
@@ -888,8 +897,8 @@ function SidePanel() {
       status={state.status}
       isRefreshing={state.isRefreshing}
       isLoadingResources={state.isLoadingResources}
-      cloud115={cloud115}
-      onRecheckCloud={checkCloud115}
+      connectedClouds={connectedClouds}
+      onRecheckCloud={checkClouds}
     />
   );
 }

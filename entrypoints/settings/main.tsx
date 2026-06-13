@@ -1,12 +1,13 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { Check, ChevronLeft, Clock, Folder, LogOut, RefreshCw, Server } from 'lucide-react';
+import { Check, ChevronLeft, Clock, Folder, Link2, LogOut, RefreshCw, Server, Trash2 } from 'lucide-react';
 
 import '../style.css';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import {
   clear115DownloadDir,
@@ -19,6 +20,14 @@ import {
   type Directory115,
   type Session115Status,
 } from '@/lib/adapters/clouds/115';
+import {
+  adapterAlist,
+  ALIST_TOOLS,
+  clearAlistConfig,
+  getAlistConfig,
+  saveAlistConfig,
+  type AlistConfig,
+} from '@/lib/adapters/clouds/alist';
 
 type DirectoryCrumb = {
   id: string;
@@ -49,6 +58,148 @@ function sourceLabel(source: Session115Status['source']) {
 function buildDirectoryPath(items: DirectoryCrumb[]) {
   const names = items.map((item) => item.name).filter((name) => name !== '根目录');
   return names.length ? `/${names.join('/')}` : '根目录';
+}
+
+const EMPTY_ALIST_FORM: AlistConfig = { url: '', token: '', path: '/', tool: ALIST_TOOLS[0] };
+
+function AlistSection() {
+  const [form, setForm] = React.useState<AlistConfig>(EMPTY_ALIST_FORM);
+  const [configured, setConfigured] = React.useState(false);
+  const [testing, setTesting] = React.useState(false);
+  const [testResult, setTestResult] = React.useState<'idle' | 'ok' | 'fail'>('idle');
+  const [username, setUsername] = React.useState<string | undefined>();
+
+  React.useEffect(() => {
+    void getAlistConfig().then((config) => {
+      if (config) {
+        setForm({ ...EMPTY_ALIST_FORM, ...config });
+        setConfigured(true);
+      }
+    });
+  }, []);
+
+  const updateField = (key: keyof AlistConfig) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const value = event.target.value;
+    setForm((current) => ({ ...current, [key]: value }));
+    setTestResult('idle');
+  };
+
+  const saveAndTest = React.useCallback(async () => {
+    setTesting(true);
+    setTestResult('idle');
+    try {
+      await saveAlistConfig(form);
+      setConfigured(true);
+      const status = await adapterAlist.checkConnection();
+      setUsername(status.username);
+      setTestResult(status.connected ? 'ok' : 'fail');
+    } finally {
+      setTesting(false);
+    }
+  }, [form]);
+
+  const clearAll = React.useCallback(async () => {
+    await clearAlistConfig();
+    setForm(EMPTY_ALIST_FORM);
+    setConfigured(false);
+    setTestResult('idle');
+    setUsername(undefined);
+  }, []);
+
+  const canSave = Boolean(form.url.trim() && form.token.trim());
+
+  return (
+    <section>
+      <h2 className="text-lg font-semibold mb-3">AList 连接（可选）</h2>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between gap-3 text-base">
+            <span className="flex items-center gap-2">
+              <Link2 className="h-4 w-4" />
+              AList 网关
+            </span>
+            <Badge
+              variant="outline"
+              className={
+                testResult === 'ok'
+                  ? 'text-green-600 border-green-300'
+                  : testResult === 'fail'
+                    ? 'text-destructive border-destructive/40'
+                    : 'text-muted-foreground'
+              }
+            >
+              {testResult === 'ok' ? `已连接${username ? ` · ${username}` : ''}` : testResult === 'fail' ? '连接失败' : configured ? '已配置' : '未配置'}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <p className="text-xs text-muted-foreground">
+            通过自建 AList 网关推送离线下载，作为 115 直连之外的备选通道。
+          </p>
+
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground">服务地址</span>
+              <Input
+                placeholder="https://alist.example.com"
+                value={form.url}
+                onChange={updateField('url')}
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground">Token</span>
+              <Input
+                type="password"
+                placeholder="AList 管理员 Token"
+                value={form.token}
+                onChange={updateField('token')}
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground">保存路径</span>
+              <Input
+                placeholder="/115/云下载"
+                value={form.path}
+                onChange={updateField('path')}
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground">离线下载工具</span>
+              <select
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={form.tool ?? ALIST_TOOLS[0]}
+                onChange={updateField('tool')}
+              >
+                {ALIST_TOOLS.map((tool) => (
+                  <option key={tool} value={tool}>{tool}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button className="gap-1" size="sm" disabled={!canSave || testing} onClick={() => void saveAndTest()}>
+              {testing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {testing ? '测试中' : '保存并测试连接'}
+            </Button>
+            <Button className="gap-1" size="sm" variant="outline" disabled={!configured} onClick={() => void clearAll()}>
+              <Trash2 className="h-4 w-4" />
+              清除配置
+            </Button>
+          </div>
+
+          {testResult === 'fail' ? (
+            <Alert variant="destructive">
+              <AlertTitle>连接失败</AlertTitle>
+              <AlertDescription>
+                请检查地址、Token 是否正确，以及扩展能否访问该地址（自签证书需先在浏览器中信任）。
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </CardContent>
+      </Card>
+    </section>
+  );
 }
 
 function OptionsPage() {
@@ -156,7 +307,7 @@ function OptionsPage() {
         <header className="border-b pb-4">
           <h1 className="text-2xl font-bold tracking-tight">BT0 设置</h1>
           <p className="text-sm text-muted-foreground mt-2">
-            使用并缓存当前浏览器的 115 登录态，将磁力链接推送到 115 离线下载。
+            连接 115（浏览器登录态）或自建 AList 网关，将磁力链接一键推送到离线下载。
           </p>
         </header>
 
@@ -372,6 +523,10 @@ function OptionsPage() {
             </CardContent>
           </Card>
         </section>
+
+        <Separator />
+
+        <AlistSection />
 
         <section>
           <h2 className="text-lg font-semibold mb-3">工作方式</h2>

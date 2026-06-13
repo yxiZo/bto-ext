@@ -7,6 +7,7 @@
 
 import { browser } from 'wxt/browser';
 import type { CloudAdapter, CloudConnectionStatus, CloudTaskResult } from '../types.ts';
+import { addPushRecord, hashUri, wasAlreadyPushed } from './push-history.ts';
 
 // ===========================================================================
 // 配置存储
@@ -14,13 +15,17 @@ import type { CloudAdapter, CloudConnectionStatus, CloudTaskResult } from '../ty
 
 const CONFIG_KEY = 'bt0_alist_config';
 
-type AlistConfig = {
+/** AList 离线下载工具，对应 /api/fs/add_offline_download 的 tool 参数 */
+export const ALIST_TOOLS = ['115 Cloud', 'aria2', 'qBittorrent', 'Transmission', 'PikPak', 'Thunder'] as const;
+
+export type AlistConfig = {
   url: string;    // e.g. "https://alist.example.com"
   token: string;  // AList admin token
   path: string;   // 离线下载目标路径，e.g. "/115/云下载"
+  tool?: string;  // 离线下载工具，默认 "115 Cloud"
 };
 
-async function getConfig(): Promise<AlistConfig | null> {
+export async function getAlistConfig(): Promise<AlistConfig | null> {
   try {
     const result = await browser.storage.local.get(CONFIG_KEY);
     const raw = result[CONFIG_KEY] as AlistConfig | undefined;
@@ -29,53 +34,18 @@ async function getConfig(): Promise<AlistConfig | null> {
   } catch { return null; }
 }
 
-export async function saveConfig(config: AlistConfig): Promise<void> {
+export async function saveAlistConfig(config: AlistConfig): Promise<void> {
   // Trim trailing slash
   const cfg = { ...config, url: config.url.replace(/\/+$/, '') };
   await browser.storage.local.set({ [CONFIG_KEY]: cfg });
 }
 
-// ===========================================================================
-// 推送历史
-// ===========================================================================
-
-const PUSH_HISTORY_KEY = 'bt0_push_history';
-const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-type PushRecord = {
-  uriHash: string;
-  cloudId: string;
-  success: boolean;
-  error?: string;
-  pushedAt: number;
-};
-
-function hashUri(uri: string): string {
-  let h = 0;
-  for (let i = 0; i < uri.length; i++) h = ((h << 5) - h + uri.charCodeAt(i)) | 0;
-  return h.toString(36);
-}
-
-async function getPushHistory(): Promise<PushRecord[]> {
+export async function clearAlistConfig(): Promise<void> {
   try {
-    const raw = (await browser.storage.local.get(PUSH_HISTORY_KEY))[PUSH_HISTORY_KEY];
-    return Array.isArray(raw) ? raw : [];
-  } catch { return []; }
-}
-
-async function addPushRecord(record: PushRecord): Promise<void> {
-  const history = await getPushHistory();
-  const cutoff = Date.now() - HISTORY_TTL_MS;
-  const fresh = history.filter((r) => r.pushedAt > cutoff);
-  fresh.push(record);
-  await browser.storage.local.set({ [PUSH_HISTORY_KEY]: fresh.slice(-500) });
-}
-
-async function wasAlreadyPushed(uri: string): Promise<boolean> {
-  const h = hashUri(uri);
-  const history = await getPushHistory();
-  const cutoff = Date.now() - HISTORY_TTL_MS;
-  return history.some((r) => r.uriHash === h && r.success && r.pushedAt > cutoff);
+    await browser.storage.local.remove(CONFIG_KEY);
+  } catch {
+    // Ignore cleanup failures
+  }
 }
 
 // ===========================================================================
@@ -84,7 +54,7 @@ async function wasAlreadyPushed(uri: string): Promise<boolean> {
 
 /** GET /api/me — 验证连接 */
 async function checkConnection(): Promise<CloudConnectionStatus> {
-  const config = await getConfig();
+  const config = await getAlistConfig();
   if (!config) return { connected: false };
 
   try {
@@ -105,16 +75,16 @@ async function checkConnection(): Promise<CloudConnectionStatus> {
 /** POST /api/fs/add_offline_download */
 async function submitOfflineTask(uri: string, _fileName?: string): Promise<CloudTaskResult> {
   if (!uri.startsWith('magnet:')) return { success: false, error: '不是有效的磁力链接' };
-  if (await wasAlreadyPushed(uri)) return { success: false, error: '已推送过' };
+  if (await wasAlreadyPushed('alist', uri)) return { success: false, duplicate: true, error: '已推送过' };
 
-  const config = await getConfig();
+  const config = await getAlistConfig();
   if (!config) return { success: false, error: '请先配置 AList' };
 
   try {
     const body = JSON.stringify({
       path: config.path || '/',
       urls: [uri],
-      tool: '115 Cloud',
+      tool: config.tool || ALIST_TOOLS[0],
       delete_policy: 'delete_on_upload_succeed',
     });
 

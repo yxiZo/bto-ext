@@ -3,6 +3,9 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
@@ -10,31 +13,37 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
-    "test": "node --test tests/*.test.ts"
+    "lint": "eslint .",
+    "test": "node --test tests/*.test.ts",
+    "postinstall": "wxt prepare"
   },
   "dependencies": {
     "@radix-ui/react-scroll-area": "^1.2.11",
     "@radix-ui/react-separator": "^1.1.9",
     "@radix-ui/react-slot": "^1.2.5",
     "@radix-ui/react-tabs": "^1.1.14",
-    "class-variance-authority": "latest",
-    "clsx": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "tailwind-merge": "latest"
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
-    "@types/chrome": "latest",
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "latest",
-    "@wxt-dev/module-react": "latest",
-    "autoprefixer": "latest",
-    "postcss": "latest",
-    "tailwindcss": "^3.4.17",
-    "typescript": "latest",
-    "wxt": "latest"
+    "@eslint/js": "^10.0.1",
+    "@types/chrome": "^0.1.43",
+    "@types/node": "^25.9.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "@wxt-dev/module-react": "^1.2.2",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.0",
+    "wxt": "^0.20.26"
   }
 }

@@ -8,6 +8,16 @@
  */
 export type RouteKind = 'detail' | 'listing' | 'search' | 'other';
 
+/** 单个种子的推荐元数据 */
+export type SeedRecommendation = {
+  /** 是否为所在清晰度分组内的推荐项 */
+  isRecommended: boolean;
+  /** 推荐理由（人类可读） */
+  reason: string;
+  /** 推荐评分（越高越好） */
+  score: number;
+};
+
 /** A single seed / magnet / download resource item */
 export type SeedResource = {
   /** Display name (file / release name) */
@@ -22,6 +32,8 @@ export type SeedResource = {
   addedAt: string | null;
   /** Whether the resource is marked as "new" */
   isNew: boolean;
+  /** Recommendation metadata, attached by the site adapter when available */
+  recommendation?: SeedRecommendation;
 };
 
 /** Resource count per category */
@@ -59,14 +71,8 @@ export type MediaSnapshot = {
     netdiskTotal: number | null;
     categories: ResourceCategory[];
     visibleItems: number;
-    /** Seeds grouped by quality */
-    seedsByQuality: Record<string, SeedResource[]>;
-    /** Flat list of all seeds */
+    /** Flat list of all seeds (with recommendation attached when available) */
     allSeeds: SeedResource[];
-    /** URIs of recommended seeds */
-    recommendedSeeds: string[];
-    /** Reasons keyed by seed URI */
-    recommendationReasons: Record<string, string>;
   };
   /** Route kind from the site adapter */
   routeKind: RouteKind;
@@ -105,10 +111,7 @@ export function emptySnapshot(url: string, routeKind: RouteKind): MediaSnapshot 
       netdiskTotal: null,
       categories: [],
       visibleItems: 0,
-      seedsByQuality: {},
       allSeeds: [],
-      recommendedSeeds: [],
-      recommendationReasons: {},
     },
     routeKind,
     pageReady: false,

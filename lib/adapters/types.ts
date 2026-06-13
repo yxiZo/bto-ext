@@ -33,6 +33,12 @@ export interface SiteAdapter {
 
   /** Group seeds by quality definition */
   groupSeedsByQuality(seeds: SeedResource[]): Record<string, SeedResource[]>;
+
+  /**
+   * Cheap signature of the current page content (site-specific selectors).
+   * Content script uses it to decide whether the page changed enough to notify.
+   */
+  pageSignature(): string;
 }
 
 // ===========================================================================
@@ -50,6 +56,8 @@ export type CloudTaskResult = {
   success: boolean;
   taskId?: string;
   error?: string;
+  /** 同一链接近期已成功推送过（不算失败） */
+  duplicate?: boolean;
 };
 
 export interface CloudAdapter {

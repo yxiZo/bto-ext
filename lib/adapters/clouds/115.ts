@@ -6,6 +6,7 @@
 
 import { browser } from 'wxt/browser';
 import type { CloudAdapter, CloudConnectionStatus, CloudTaskResult } from '../types.ts';
+import { addPushRecord, hashUri, wasAlreadyPushed } from './push-history.ts';
 
 // ===========================================================================
 // API（真实端点）
@@ -57,28 +58,6 @@ export type Directory115 = {
 };
 
 // ===========================================================================
-// 推送历史
-// ===========================================================================
-
-const PUSH_HISTORY_KEY = 'bt0_push_history';
-const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-type PushRecord = {
-  uriHash: string;
-  cloudId: string;
-  infoHash?: string;
-  success: boolean;
-  error?: string;
-  pushedAt: number;
-};
-
-function hashUri(uri: string): string {
-  let h = 0;
-  for (let i = 0; i < uri.length; i++) h = ((h << 5) - h + uri.charCodeAt(i)) | 0;
-  return h.toString(36);
-}
-
-// ===========================================================================
 // 配置
 // ===========================================================================
 
@@ -99,28 +78,6 @@ export async function clear115DownloadDir(): Promise<void> {
   const nextConfig = { ...config };
   delete nextConfig.downloadDir;
   await browser.storage.local.set({ [CONFIG_KEY]: nextConfig satisfies Config115 });
-}
-
-async function getPushHistory(): Promise<PushRecord[]> {
-  try {
-    const raw = (await browser.storage.local.get(PUSH_HISTORY_KEY))[PUSH_HISTORY_KEY];
-    return Array.isArray(raw) ? raw : [];
-  } catch { return []; }
-}
-
-async function addPushRecord(record: PushRecord): Promise<void> {
-  const history = await getPushHistory();
-  const cutoff = Date.now() - HISTORY_TTL_MS;
-  const fresh = history.filter((r) => r.pushedAt > cutoff);
-  fresh.push(record);
-  await browser.storage.local.set({ [PUSH_HISTORY_KEY]: fresh.slice(-500) });
-}
-
-async function wasAlreadyPushed(uri: string): Promise<boolean> {
-  const h = hashUri(uri);
-  const history = await getPushHistory();
-  const cutoff = Date.now() - HISTORY_TTL_MS;
-  return history.some((r) => r.uriHash === h && r.success && r.pushedAt > cutoff);
 }
 
 // ===========================================================================
@@ -313,7 +270,7 @@ export async function list115Directories(parentId = '0'): Promise<Directory115[]
 
 async function submitOfflineTask(uri: string, _fileName?: string): Promise<CloudTaskResult> {
   if (!uri.startsWith('magnet:')) return { success: false, error: '不是有效的磁力链接' };
-  if (await wasAlreadyPushed(uri)) return { success: false, error: '已推送过' };
+  if (await wasAlreadyPushed('115', uri)) return { success: false, duplicate: true, error: '已推送过' };
 
   const cookieHeader = await get115CookieHeader();
   if (!cookieHeader) return { success: false, error: '请先登录 115.com' };

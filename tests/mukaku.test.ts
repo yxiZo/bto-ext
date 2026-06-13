@@ -32,7 +32,7 @@ describe('Mukaku route helpers', () => {
   it('rejects unknown and offsite routes', () => {
     assert.equal(mukakuAdapter.detectRouteKind('https://web5.mukaku.com/notice/1.html'), 'other');
     assert.equal(mukakuAdapter.detectRouteKind('https://example.com/mv/123456'), 'other');
-    assert.equal(mukakuAdapter.extractMediaId('https://example.com/mv/123456'), '123456');
+    assert.equal(mukakuAdapter.extractMediaId('https://example.com/mv/123456'), null);
   });
 });
 
